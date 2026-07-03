@@ -18,7 +18,7 @@
    =========================================================== */
 
 const SavvioCloud = (() => {
-  const PROXY_URL = "https://script.google.com/macros/s/AKfycbyLWsY4W1qejQRWRDsXXgraLYs-TrM2sFklUfhRn-xffEnAzQ06Q74a6uGzcEF7C_cF/exec"; // <- paste your Apps Script /exec URL here once deployed
+  const PROXY_URL = "https://script.google.com/macros/s/AKfycbxt-hHv1K_ijQhCsIuq0NkesAEfgSV9Bvx7ALhDKiPZouRLCrhkREZKB8TX7lHrCDNx/exec"; // <- paste your Apps Script /exec URL here once deployed
   const TIMEOUT_MS = 4000;
 
   function withTimeout(promise, ms) {
@@ -48,8 +48,8 @@ const SavvioCloud = (() => {
   return {
     isConfigured: () => !!PROXY_URL,
 
-    registerProfile: (userId, name, ageGroup, avatar, pin) =>
-      call("registerProfile", { userId, name, ageGroup, avatar, pin }),
+    registerProfile: (userId, name, ageGroup, avatar, pin, role) =>
+      call("registerProfile", { userId, name, ageGroup, avatar, pin, role }),
 
     loginProfile: (userId, pin) => call("loginProfile", { userId, pin }),
     loginByName: (name, pin) => call("loginByName", { name, pin }),
@@ -70,6 +70,31 @@ const SavvioCloud = (() => {
     completeTask: (userId, sessionToken, taskId) => call("completeTask", { userId, sessionToken, taskId }),
     listPerks: (userId, sessionToken) => call("listPerks", { userId, sessionToken }),
     redeemPerk: (userId, sessionToken, perkId) => call("redeemPerk", { userId, sessionToken, perkId }),
+
+    // --- Parent (in-app "Manage Family") ---
+    listMyKids: (userId, sessionToken) => call("listMyKids", { userId, sessionToken }),
+    parentApproveKid: (userId, sessionToken, kidId) => call("parentApproveKid", { userId, sessionToken, kidId }),
+    parentRejectKid: (userId, sessionToken, kidId) => call("parentRejectKid", { userId, sessionToken, kidId }),
+
+    parentListTasks: (userId, sessionToken) => call("parentListTasks", { userId, sessionToken }),
+    parentCreateTask: (userId, sessionToken, title, starValue, assignedTo, recurring) =>
+      call("parentCreateTask", { userId, sessionToken, title, starValue, assignedTo, recurring }),
+    parentUpdateTask: (userId, sessionToken, taskId, patch) =>
+      call("parentUpdateTask", Object.assign({ userId, sessionToken, taskId }, patch)),
+    parentDeleteTask: (userId, sessionToken, taskId) => call("parentDeleteTask", { userId, sessionToken, taskId }),
+    parentListPendingCompletions: (userId, sessionToken) => call("parentListPendingCompletions", { userId, sessionToken }),
+    parentReviewCompletion: (userId, sessionToken, completionId, approve) =>
+      call("parentReviewCompletion", { userId, sessionToken, completionId, approve }),
+
+    parentListPerks: (userId, sessionToken) => call("parentListPerks", { userId, sessionToken }),
+    parentCreatePerk: (userId, sessionToken, title, starCost, assignedTo) =>
+      call("parentCreatePerk", { userId, sessionToken, title, starCost, assignedTo }),
+    parentUpdatePerk: (userId, sessionToken, perkId, patch) =>
+      call("parentUpdatePerk", Object.assign({ userId, sessionToken, perkId }, patch)),
+    parentDeletePerk: (userId, sessionToken, perkId) => call("parentDeletePerk", { userId, sessionToken, perkId }),
+    parentListPendingRedemptions: (userId, sessionToken) => call("parentListPendingRedemptions", { userId, sessionToken }),
+    parentReviewRedemption: (userId, sessionToken, redemptionId, approve) =>
+      call("parentReviewRedemption", { userId, sessionToken, redemptionId, approve }),
 
     // --- Admin ---
     adminLogin: (username, password) => call("adminLogin", { username, password }),

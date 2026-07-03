@@ -54,7 +54,7 @@ const MAX_FAILED_ATTEMPTS = 5;
 const DEFAULT_ADMIN_USERNAME = "sav_admin";
 const DEFAULT_ADMIN_PASSWORD = "SavAdmin123$";
 
-const USER_HEADERS = ["userId","name","ageGroup","avatar","pinHash","pinSalt","status","xp","streak","stars","lastActiveDate","createdDate","dataJson","sessionToken","sessionExpiry","failedAttempts"];
+const USER_HEADERS = ["userId","name","ageGroup","role","avatar","pinHash","pinSalt","status","xp","streak","stars","lastActiveDate","createdDate","dataJson","sessionToken","sessionExpiry","failedAttempts"];
 const ADMIN_HEADERS = ["adminId","username","passwordHash","passwordSalt","createdDate","sessionToken","sessionExpiry"];
 const AUDIT_HEADERS = ["timestamp","admin","action","targetUserId","details"];
 const TASK_HEADERS = ["taskId","title","starValue","assignedTo","recurring","active","createdDate"];
@@ -87,6 +87,24 @@ function doPost(e) {
       case "completeTask": return jsonOut(completeTask(body));
       case "listPerks":    return jsonOut(listPerks(body));
       case "redeemPerk":   return jsonOut(redeemPerk(body));
+
+      case "listMyKids":       return jsonOut(listMyKids(body));
+      case "parentApproveKid": return jsonOut(parentApproveKid(body));
+      case "parentRejectKid":  return jsonOut(parentRejectKid(body));
+
+      case "parentListTasks":              return jsonOut(parentListTasks(body));
+      case "parentCreateTask":             return jsonOut(parentCreateTask(body));
+      case "parentUpdateTask":             return jsonOut(parentUpdateTask(body));
+      case "parentDeleteTask":             return jsonOut(parentDeleteTask(body));
+      case "parentListPendingCompletions": return jsonOut(parentListPendingCompletions(body));
+      case "parentReviewCompletion":       return jsonOut(parentReviewCompletion(body));
+
+      case "parentListPerks":              return jsonOut(parentListPerks(body));
+      case "parentCreatePerk":             return jsonOut(parentCreatePerk(body));
+      case "parentUpdatePerk":             return jsonOut(parentUpdatePerk(body));
+      case "parentDeletePerk":             return jsonOut(parentDeletePerk(body));
+      case "parentListPendingRedemptions": return jsonOut(parentListPendingRedemptions(body));
+      case "parentReviewRedemption":       return jsonOut(parentReviewRedemption(body));
 
       case "adminLogin":        return jsonOut(adminLogin(body));
       case "adminListUsers":    return jsonOut(adminListUsers(body));
@@ -234,7 +252,7 @@ function periodKeyFor(recurring) {
 
 function publicUser(user) {
   return {
-    userId: user.userId, name: user.name, ageGroup: user.ageGroup, avatar: user.avatar,
+    userId: user.userId, name: user.name, ageGroup: user.ageGroup, role: user.role || "kid", avatar: user.avatar,
     status: user.status, xp: user.xp, streak: user.streak, stars: Number(user.stars) || 0,
     lastActiveDate: user.lastActiveDate, createdDate: user.createdDate,
   };
@@ -245,22 +263,25 @@ function publicUser(user) {
 // ---------------------------------------------------------------
 function registerProfile(body) {
   const { userId, name, ageGroup, avatar, pin } = body;
+  const role = body.role === "parent" ? "parent" : "kid";
   if (!userId || !name || !pin) return { ok: false, error: "Missing fields" };
   if (findUser(userId)) return { ok: false, error: "Profile already exists" };
   const salt = randomSalt();
   const sessionToken = randomToken();
   const sessionExpiry = hoursFromNow(SESSION_HOURS);
   appendUserRow({
-    userId, name, ageGroup, avatar,
+    userId, name, ageGroup, role, avatar,
     pinHash: hashWithSalt(pin, salt), pinSalt: salt,
     status: "pending", xp: 0, streak: 0, stars: 0, lastActiveDate: "", createdDate: nowIso(),
     dataJson: "{}", sessionToken, sessionExpiry, failedAttempts: 0,
   });
-  notifyAdminNewSignup(name);
-  // New profiles start "pending" so they show up for parent review in the
-  // Admin portal, but that status doesn't block anything technically — sync
-  // and chores/perks all work right away. Approve/reject are for parental
-  // oversight and to trigger the "you're approved!" notice in-app.
+  notifyAdminNewSignup(name + (role === "parent" ? " (parent/guardian)" : ""));
+  // New profiles start "pending" so they show up for parent/admin review,
+  // but that status doesn't block anything technically — sync and
+  // chores/perks all work right away. Approve/reject are for oversight
+  // and to trigger the "you're approved!" notice in-app. Parent-role
+  // signups can only be approved from the Admin portal (never by another
+  // parent in-app) — see requireActiveParent below.
   return { ok: true, status: "pending", sessionToken };
 }
 
@@ -540,9 +561,22 @@ function requireAdmin(body) {
   return admin;
 }
 
-function logAudit(admin, action, targetUserId, details) {
+// A parent-role profile authorizes itself with its own userId + sessionToken
+// (the same session used for everything else it does in the app) — there's
+// no separate admin password involved. Only active, role="parent" profiles
+// pass this check, so a kid session (even a tampered client) can never call
+// parent-only actions: the role and status live server-side on the row.
+function requireActiveParent(body) {
+  const user = findUser(body.userId);
+  if (!user) throw new Error("Not authorized");
+  if (!validSession(user, body.sessionToken)) throw new Error("Not authorized");
+  if ((user.role || "kid") !== "parent" || user.status !== "active") throw new Error("Not authorized");
+  return user;
+}
+
+function logAudit(actorLabel, action, targetUserId, details) {
   appendRowObj(auditSheet(), AUDIT_HEADERS, {
-    timestamp: nowIso(), admin: admin.username, action, targetUserId: targetUserId || "", details: details || "",
+    timestamp: nowIso(), admin: actorLabel, action, targetUserId: targetUserId || "", details: details || "",
   });
 }
 
@@ -561,7 +595,7 @@ function adminSetStatus(body, status, actionName) {
   user.status = status;
   if (status === "active") user.failedAttempts = 0;
   writeUserRow(user);
-  logAudit(admin, actionName, body.userId, "");
+  logAudit("admin:" + admin.username, actionName, body.userId, "");
   return { ok: true };
 }
 
@@ -576,7 +610,7 @@ function adminResetPin(body) {
   user.failedAttempts = 0;
   if (user.status === "locked") user.status = "active";
   writeUserRow(user);
-  logAudit(admin, "resetPin", body.userId, "");
+  logAudit("admin:" + admin.username, "resetPin", body.userId, "");
   return { ok: true, newPin };
 }
 
@@ -585,64 +619,88 @@ function adminDeleteUser(body) {
   const user = findUser(body.userId);
   if (!user) return { ok: false, error: "Profile not found" };
   usersSheet().deleteRow(user._row);
-  logAudit(admin, "deleteUser", body.userId, "");
+  logAudit("admin:" + admin.username, "deleteUser", body.userId, "");
   return { ok: true };
 }
 
 // ---------------------------------------------------------------
-// Admin: chores (Tasks + Completions)
+// Kid management (parent-facing, in-app — lighter than the Admin
+// portal: approve/reject only. Lock/unlock/reset PIN/delete stay
+// admin-portal-only since a parent profile is secured by just a
+// 4-digit PIN, weaker than the Admin portal's separate login.)
 // ---------------------------------------------------------------
-function adminListTasks(body) {
-  requireAdmin(body);
-  return { ok: true, tasks: readRows(tasksSheet(), TASK_HEADERS) };
+function listMyKids(body) {
+  requireActiveParent(body);
+  const kids = readRows(usersSheet(), USER_HEADERS).filter(u => (u.role || "kid") !== "parent");
+  return { ok: true, kids: kids.map(publicUser) };
 }
 
-function adminCreateTask(body) {
-  const admin = requireAdmin(body);
-  const { title, starValue, assignedTo, recurring } = body;
+function parentApproveKid(body) {
+  const parent = requireActiveParent(body);
+  const kid = findUser(body.kidId);
+  if (!kid) return { ok: false, error: "Profile not found" };
+  if ((kid.role || "kid") === "parent") return { ok: false, error: "Parent profiles can only be approved from the Admin portal" };
+  kid.status = "active";
+  kid.failedAttempts = 0;
+  writeUserRow(kid);
+  logAudit("parent:" + parent.name, "approveKid", kid.userId, "");
+  return { ok: true };
+}
+
+function parentRejectKid(body) {
+  const parent = requireActiveParent(body);
+  const kid = findUser(body.kidId);
+  if (!kid) return { ok: false, error: "Profile not found" };
+  if ((kid.role || "kid") === "parent") return { ok: false, error: "Parent profiles can only be reviewed from the Admin portal" };
+  kid.status = "rejected";
+  writeUserRow(kid);
+  logAudit("parent:" + parent.name, "rejectKid", kid.userId, "");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------
+// Chores (Tasks + Completions) — core logic, callable by either an
+// admin or an active parent, each authorized their own way above.
+// ---------------------------------------------------------------
+function createTaskCore(actorLabel, title, starValue, assignedTo, recurring) {
   if (!title || !starValue) return { ok: false, error: "Missing fields" };
   appendRowObj(tasksSheet(), TASK_HEADERS, {
     taskId: Utilities.getUuid(), title, starValue: Number(starValue) || 0,
     assignedTo: assignedTo || "all", recurring: recurring || "none", active: true, createdDate: nowIso(),
   });
-  logAudit(admin, "createTask", "", title);
+  logAudit(actorLabel, "createTask", "", title);
   return { ok: true };
 }
 
-function adminUpdateTask(body) {
-  const admin = requireAdmin(body);
-  const task = readRows(tasksSheet(), TASK_HEADERS).find(t => t.taskId === body.taskId);
+function updateTaskCore(actorLabel, taskId, patch) {
+  const task = readRows(tasksSheet(), TASK_HEADERS).find(t => t.taskId === taskId);
   if (!task) return { ok: false, error: "Chore not found" };
-  if (body.title !== undefined) task.title = body.title;
-  if (body.starValue !== undefined) task.starValue = Number(body.starValue) || 0;
-  if (body.assignedTo !== undefined) task.assignedTo = body.assignedTo;
-  if (body.recurring !== undefined) task.recurring = body.recurring;
-  if (body.active !== undefined) task.active = body.active;
+  if (patch.title !== undefined) task.title = patch.title;
+  if (patch.starValue !== undefined) task.starValue = Number(patch.starValue) || 0;
+  if (patch.assignedTo !== undefined) task.assignedTo = patch.assignedTo;
+  if (patch.recurring !== undefined) task.recurring = patch.recurring;
+  if (patch.active !== undefined) task.active = patch.active;
   writeRow(tasksSheet(), TASK_HEADERS, task);
-  logAudit(admin, "updateTask", "", task.title);
+  logAudit(actorLabel, "updateTask", "", task.title);
   return { ok: true };
 }
 
-function adminDeleteTask(body) {
-  const admin = requireAdmin(body);
-  const task = readRows(tasksSheet(), TASK_HEADERS).find(t => t.taskId === body.taskId);
+function deleteTaskCore(actorLabel, taskId) {
+  const task = readRows(tasksSheet(), TASK_HEADERS).find(t => t.taskId === taskId);
   if (!task) return { ok: false, error: "Chore not found" };
   tasksSheet().deleteRow(task._row);
-  logAudit(admin, "deleteTask", "", task.title);
+  logAudit(actorLabel, "deleteTask", "", task.title);
   return { ok: true };
 }
 
-function adminListPendingCompletions(body) {
-  requireAdmin(body);
+function pendingCompletionsCore() {
   const users = readRows(usersSheet(), USER_HEADERS);
   const nameFor = uid => { const u = users.find(x => x.userId === uid); return u ? u.name : uid; };
   const pending = readRows(completionsSheet(), COMPLETION_HEADERS).filter(c => c.status === "pending");
-  return { ok: true, completions: pending.map(c => Object.assign({}, c, { kidName: nameFor(c.userId) })) };
+  return pending.map(c => Object.assign({}, c, { kidName: nameFor(c.userId) }));
 }
 
-function adminReviewCompletion(body) {
-  const admin = requireAdmin(body);
-  const { completionId, approve } = body;
+function reviewCompletionCore(actorLabel, completionId, approve) {
   const c = readRows(completionsSheet(), COMPLETION_HEADERS).find(x => x.completionId === completionId);
   if (!c) return { ok: false, error: "Not found" };
   c.status = approve ? "approved" : "rejected";
@@ -652,63 +710,67 @@ function adminReviewCompletion(body) {
     const user = findUser(c.userId);
     if (user) { user.stars = (Number(user.stars) || 0) + (Number(c.starValue) || 0); writeUserRow(user); }
   }
-  logAudit(admin, approve ? "approveChore" : "rejectChore", c.userId, c.taskTitle);
+  logAudit(actorLabel, approve ? "approveChore" : "rejectChore", c.userId, c.taskTitle);
   return { ok: true };
 }
 
-// ---------------------------------------------------------------
-// Admin: perks (Perks + Redemptions)
-// ---------------------------------------------------------------
-function adminListPerks(body) {
-  requireAdmin(body);
-  return { ok: true, perks: readRows(perksSheet(), PERK_HEADERS) };
-}
+// --- Admin wrappers ---
+function adminListTasks(body) { requireAdmin(body); return { ok: true, tasks: readRows(tasksSheet(), TASK_HEADERS) }; }
+function adminCreateTask(body) { const a = requireAdmin(body); return createTaskCore("admin:" + a.username, body.title, body.starValue, body.assignedTo, body.recurring); }
+function adminUpdateTask(body) { const a = requireAdmin(body); return updateTaskCore("admin:" + a.username, body.taskId, body); }
+function adminDeleteTask(body) { const a = requireAdmin(body); return deleteTaskCore("admin:" + a.username, body.taskId); }
+function adminListPendingCompletions(body) { requireAdmin(body); return { ok: true, completions: pendingCompletionsCore() }; }
+function adminReviewCompletion(body) { const a = requireAdmin(body); return reviewCompletionCore("admin:" + a.username, body.completionId, body.approve); }
 
-function adminCreatePerk(body) {
-  const admin = requireAdmin(body);
-  const { title, starCost, assignedTo } = body;
+// --- Parent wrappers (in-app, own session — see requireActiveParent) ---
+function parentListTasks(body) { requireActiveParent(body); return { ok: true, tasks: readRows(tasksSheet(), TASK_HEADERS) }; }
+function parentCreateTask(body) { const p = requireActiveParent(body); return createTaskCore("parent:" + p.name, body.title, body.starValue, body.assignedTo, body.recurring); }
+function parentUpdateTask(body) { const p = requireActiveParent(body); return updateTaskCore("parent:" + p.name, body.taskId, body); }
+function parentDeleteTask(body) { const p = requireActiveParent(body); return deleteTaskCore("parent:" + p.name, body.taskId); }
+function parentListPendingCompletions(body) { requireActiveParent(body); return { ok: true, completions: pendingCompletionsCore() }; }
+function parentReviewCompletion(body) { const p = requireActiveParent(body); return reviewCompletionCore("parent:" + p.name, body.completionId, body.approve); }
+
+// ---------------------------------------------------------------
+// Perks / rewards (Perks + Redemptions) — same core+wrapper shape
+// ---------------------------------------------------------------
+function createPerkCore(actorLabel, title, starCost, assignedTo) {
   if (!title || !starCost) return { ok: false, error: "Missing fields" };
   appendRowObj(perksSheet(), PERK_HEADERS, {
     perkId: Utilities.getUuid(), title, starCost: Number(starCost) || 0,
     assignedTo: assignedTo || "all", active: true, createdDate: nowIso(),
   });
-  logAudit(admin, "createPerk", "", title);
+  logAudit(actorLabel, "createPerk", "", title);
   return { ok: true };
 }
 
-function adminUpdatePerk(body) {
-  const admin = requireAdmin(body);
-  const perk = readRows(perksSheet(), PERK_HEADERS).find(p => p.perkId === body.perkId);
+function updatePerkCore(actorLabel, perkId, patch) {
+  const perk = readRows(perksSheet(), PERK_HEADERS).find(p => p.perkId === perkId);
   if (!perk) return { ok: false, error: "Reward not found" };
-  if (body.title !== undefined) perk.title = body.title;
-  if (body.starCost !== undefined) perk.starCost = Number(body.starCost) || 0;
-  if (body.assignedTo !== undefined) perk.assignedTo = body.assignedTo;
-  if (body.active !== undefined) perk.active = body.active;
+  if (patch.title !== undefined) perk.title = patch.title;
+  if (patch.starCost !== undefined) perk.starCost = Number(patch.starCost) || 0;
+  if (patch.assignedTo !== undefined) perk.assignedTo = patch.assignedTo;
+  if (patch.active !== undefined) perk.active = patch.active;
   writeRow(perksSheet(), PERK_HEADERS, perk);
-  logAudit(admin, "updatePerk", "", perk.title);
+  logAudit(actorLabel, "updatePerk", "", perk.title);
   return { ok: true };
 }
 
-function adminDeletePerk(body) {
-  const admin = requireAdmin(body);
-  const perk = readRows(perksSheet(), PERK_HEADERS).find(p => p.perkId === body.perkId);
+function deletePerkCore(actorLabel, perkId) {
+  const perk = readRows(perksSheet(), PERK_HEADERS).find(p => p.perkId === perkId);
   if (!perk) return { ok: false, error: "Reward not found" };
   perksSheet().deleteRow(perk._row);
-  logAudit(admin, "deletePerk", "", perk.title);
+  logAudit(actorLabel, "deletePerk", "", perk.title);
   return { ok: true };
 }
 
-function adminListPendingRedemptions(body) {
-  requireAdmin(body);
+function pendingRedemptionsCore() {
   const users = readRows(usersSheet(), USER_HEADERS);
   const nameFor = uid => { const u = users.find(x => x.userId === uid); return u ? u.name : uid; };
   const pending = readRows(redemptionsSheet(), REDEMPTION_HEADERS).filter(r => r.status === "pending");
-  return { ok: true, redemptions: pending.map(r => Object.assign({}, r, { kidName: nameFor(r.userId) })) };
+  return pending.map(r => Object.assign({}, r, { kidName: nameFor(r.userId) }));
 }
 
-function adminReviewRedemption(body) {
-  const admin = requireAdmin(body);
-  const { redemptionId, approve } = body;
+function reviewRedemptionCore(actorLabel, redemptionId, approve) {
   const r = readRows(redemptionsSheet(), REDEMPTION_HEADERS).find(x => x.redemptionId === redemptionId);
   if (!r) return { ok: false, error: "Not found" };
   r.status = approve ? "fulfilled" : "rejected";
@@ -718,6 +780,22 @@ function adminReviewRedemption(body) {
     const user = findUser(r.userId);
     if (user) { user.stars = (Number(user.stars) || 0) + (Number(r.starCost) || 0); writeUserRow(user); }
   }
-  logAudit(admin, approve ? "fulfillRedemption" : "rejectRedemption", r.userId, r.perkTitle);
+  logAudit(actorLabel, approve ? "fulfillRedemption" : "rejectRedemption", r.userId, r.perkTitle);
   return { ok: true };
 }
+
+// --- Admin wrappers ---
+function adminListPerks(body) { requireAdmin(body); return { ok: true, perks: readRows(perksSheet(), PERK_HEADERS) }; }
+function adminCreatePerk(body) { const a = requireAdmin(body); return createPerkCore("admin:" + a.username, body.title, body.starCost, body.assignedTo); }
+function adminUpdatePerk(body) { const a = requireAdmin(body); return updatePerkCore("admin:" + a.username, body.perkId, body); }
+function adminDeletePerk(body) { const a = requireAdmin(body); return deletePerkCore("admin:" + a.username, body.perkId); }
+function adminListPendingRedemptions(body) { requireAdmin(body); return { ok: true, redemptions: pendingRedemptionsCore() }; }
+function adminReviewRedemption(body) { const a = requireAdmin(body); return reviewRedemptionCore("admin:" + a.username, body.redemptionId, body.approve); }
+
+// --- Parent wrappers ---
+function parentListPerks(body) { requireActiveParent(body); return { ok: true, perks: readRows(perksSheet(), PERK_HEADERS) }; }
+function parentCreatePerk(body) { const p = requireActiveParent(body); return createPerkCore("parent:" + p.name, body.title, body.starCost, body.assignedTo); }
+function parentUpdatePerk(body) { const p = requireActiveParent(body); return updatePerkCore("parent:" + p.name, body.perkId, body); }
+function parentDeletePerk(body) { const p = requireActiveParent(body); return deletePerkCore("parent:" + p.name, body.perkId); }
+function parentListPendingRedemptions(body) { requireActiveParent(body); return { ok: true, redemptions: pendingRedemptionsCore() }; }
+function parentReviewRedemption(body) { const p = requireActiveParent(body); return reviewRedemptionCore("parent:" + p.name, body.redemptionId, body.approve); }

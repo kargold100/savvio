@@ -75,6 +75,10 @@ const state = {
   plannerDraft: null,
   choresData: null,
   perksData: null,
+  manageTab: "kids",
+  manageKids: null,
+  manageTasks: null,
+  managePerks: null,
 };
 
 const $app = () => document.getElementById("app");
@@ -104,6 +108,8 @@ function money(n) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
+
+function isActiveVal(v) { return v === true || v === "TRUE" || v === "true"; }
 
 function getLevelInfo(xp) {
   let current = LEVELS[0];
@@ -147,10 +153,10 @@ function openModal(innerHtml) {
 // ---------------------------------------------------------------
 // Profile / persistence helpers
 // ---------------------------------------------------------------
-function newProfile({ name, ageGroup, avatar, pin }) {
+function newProfile({ name, ageGroup, avatar, pin, role }) {
   return {
     id: uid("kid"),
-    name, ageGroup, avatar, pin,
+    name, ageGroup, avatar, pin, role: role || "kid",
     xp: 0, streak: 0, stars: 0, lastActiveDate: null,
     createdDate: todayStr(),
     goals: [], budget: [], lessonsCompleted: [], quizAttempts: [],
@@ -251,7 +257,7 @@ function go(screen, params = {}) {
 }
 
 function render() {
-  const authScreens = ["splash","login-entry","onboard-age","onboard-avatar","pin-login"];
+  const authScreens = ["splash","login-entry","onboard-role","onboard-age","onboard-avatar","pin-login"];
   if (state.screen !== "locked" && state.screen !== "rejected" && !authScreens.includes(state.screen) && !state.profile) { state.screen = "splash"; }
 
   let html = "";
@@ -259,6 +265,7 @@ function render() {
     case "splash": html = renderSplash(); break;
     case "login-entry": html = renderLoginEntry(); break;
     case "onboard-age": html = renderOnboardAge(); break;
+    case "onboard-role": html = renderOnboardRole(); break;
     case "onboard-avatar": html = renderOnboardAvatar(); break;
     case "pin-login": html = renderPinLogin(); break;
     case "dashboard": html = renderDashboard(); break;
@@ -276,6 +283,7 @@ function render() {
     case "rejected": html = renderRejected(); break;
     case "chores": html = renderChores(); break;
     case "perks": html = renderPerks(); break;
+    case "manage": html = renderManage(); break;
     default: html = renderSplash();
   }
   $app().innerHTML = html;
@@ -294,13 +302,14 @@ function shell(innerHtml, activeNav) {
 }
 
 function bottomNav(active) {
+  const isParent = state.profile && state.profile.role === "parent";
   const items = [
     { id:"dashboard", icon:"🏠", label:"Home" },
     { id:"goals", icon:"🎯", label:"Goals" },
     { id:"budget", icon:"📒", label:"Budget" },
     { id:"lessons", icon:"📘", label:"Learn" },
     { id:"quiz", icon:"❓", label:"Quiz" },
-    { id:"rewards", icon:"🏅", label:"Rewards" },
+    isParent ? { id:"manage", icon:"👪", label:"Manage" } : { id:"rewards", icon:"🏅", label:"Rewards" },
   ];
   return `<div class="bottomnav">
     ${items.map(i => `<button data-nav="${i.id}" class="${active===i.id?'active':''}">
@@ -354,6 +363,21 @@ function renderLoginEntry() {
       <button class="btn btn-primary btn-block" id="li-submit" style="max-width:320px;margin-top:16px;">Continue</button>
       <button class="btn btn-outline btn-block btn-sm" data-nav="splash" style="max-width:320px;margin-top:10px;">← Back</button>
       <p id="li-error" style="color:var(--danger);font-size:.82rem;min-height:1.2em;"></p>
+    </div>
+  `;
+}
+
+function renderOnboardRole() {
+  return `
+    <div class="splash">
+      <div style="font-size:3rem;">👪</div>
+      <h1>One more thing, ${escapeHtml(state.onboard.name)}</h1>
+      <p>Are you setting this up as a parent/guardian, or for yourself as a kid or teen?</p>
+      <div class="age-toggle" style="width:100%;max-width:320px;">
+        <button data-role="parent" class="${state.onboard.role==='parent'?'selected':''}">👤<br>Parent /<br>Guardian</button>
+        <button data-role="kid" class="${state.onboard.role==='kid'?'selected':''}">🧒<br>Kid or<br>Teen</button>
+      </div>
+      <button class="btn btn-primary btn-block" id="ob-role-next" style="max-width:320px;margin-top:16px;" ${state.onboard.role?"":"disabled"}>Continue</button>
     </div>
   `;
 }
@@ -440,8 +464,8 @@ async function submitLoginEntry() {
 
 function offerCreateProfile(name, pin) {
   toast(`No profile found for "${name}" — let's create one!`);
-  state.onboard = { name, ageGroup: "", avatar: "", pin };
-  go("onboard-age");
+  state.onboard = { name, ageGroup: "", avatar: "", pin, role: "" };
+  go("onboard-role");
 }
 
 async function completeCloudLogin(res, pin) {
@@ -452,7 +476,7 @@ async function completeCloudLogin(res, pin) {
   const existing = SavvioStorage.getProfile(userId);
   const previousStatus = existing ? existing.cloudStatus : null;
   const profile = {
-    id: userId, name: res.profile.name, ageGroup: res.profile.ageGroup, avatar: res.profile.avatar, pin,
+    id: userId, name: res.profile.name, ageGroup: res.profile.ageGroup, role: res.profile.role || "kid", avatar: res.profile.avatar, pin,
     xp: res.profile.xp || 0, streak: res.profile.streak || 0, stars: res.profile.stars || 0, lastActiveDate: res.profile.lastActiveDate || null,
     createdDate: res.profile.createdDate || todayStr(),
     goals: saved.goals || (existing && existing.goals) || [],
@@ -480,13 +504,13 @@ async function finalizeNewProfile() {
   SavvioStorage.saveProfile(profile);
   SavvioStorage.setActiveProfileId(profile.id);
   state.profile = profile;
-  state.onboard = { name: "", ageGroup: "", avatar: "", pin: "" };
+  state.onboard = { name: "", ageGroup: "", avatar: "", pin: "", role: "" };
   state.loginEntry = { name: "", pin: "" };
   touchDailyStreak();
-  toast(`Welcome, ${profile.name}! 🌱`);
+  toast(profile.role === "parent" ? `Welcome, ${profile.name}! 👪` : `Welcome, ${profile.name}! 🌱`);
   go("dashboard");
   if (SavvioCloud.isConfigured()) {
-    const res = await SavvioCloud.registerProfile(profile.id, profile.name, profile.ageGroup, profile.avatar, profile.pin);
+    const res = await SavvioCloud.registerProfile(profile.id, profile.name, profile.ageGroup, profile.avatar, profile.pin, profile.role);
     if (res && res.ok) {
       profile.cloudStatus = res.status;
       profile.sessionToken = res.sessionToken;
@@ -1279,6 +1303,200 @@ async function redeemPerkFlow(perkId) {
 }
 
 // ---------------------------------------------------------------
+// Manage Family (parent role) — kids, chore catalog + approvals,
+// reward catalog + fulfilment. Lock/unlock/reset PIN/delete stay
+// Admin-portal-only; see Code.gs requireActiveParent for why.
+// ---------------------------------------------------------------
+function renderManage() {
+  if (!SavvioCloud.isConfigured()) {
+    return shell(`
+      <div class="section-head" style="margin-top:0;"><h2>Manage Family</h2></div>
+      <div class="card empty-state"><span class="emoji">👪</span>This needs the cloud backend connected first. Ask whoever set this up to finish <code>appsscript/SETUP.md</code>.</div>
+    `, "manage");
+  }
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Manage Family</h2></div>
+    <div class="tab-row">
+      <button data-managetab="kids" class="${state.manageTab==='kids'?'active':''}">Kids</button>
+      <button data-managetab="chores" class="${state.manageTab==='chores'?'active':''}">Chores</button>
+      <button data-managetab="perks" class="${state.manageTab==='perks'?'active':''}">Rewards</button>
+    </div>
+    ${state.manageTab === "kids" ? renderManageKids() : state.manageTab === "chores" ? renderManageChores() : renderManagePerks()}
+  `, "manage");
+}
+
+function renderManageKids() {
+  if (!state.manageKids) { loadManageKids(); return `<div class="card" style="text-align:center;">Loading your kids…</div>`; }
+  const { kids, error } = state.manageKids;
+  return `
+    ${error ? `<div class="card empty-state">${escapeHtml(error)}</div>` : ""}
+    ${kids && kids.length ? kids.map(k => `
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:40px;height:40px;border-radius:50%;background:var(--primary-tint);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0;">${k.avatar}</div>
+          <div style="flex:1;">
+            <div style="font-weight:700;">${escapeHtml(k.name)}</div>
+            <div style="font-size:.75rem;color:var(--ink-faint);">Level ${getLevelInfo(k.xp).level} · ⭐ ${k.stars||0} · 🔥${k.streak||0}</div>
+          </div>
+          <span class="status-pill status-${k.status}">${k.status}</span>
+        </div>
+        ${k.status === "pending" ? `
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button class="btn btn-primary btn-sm" data-kid-approve="${k.userId}">Approve</button>
+          <button class="btn btn-outline btn-sm" data-kid-reject="${k.userId}">Reject</button>
+        </div>` : ""}
+      </div>
+    `).join("") : `<div class="card empty-state"><span class="emoji">👪</span>No kid profiles yet — once one signs up here, they'll show up for approval.</div>`}
+    <p style="font-size:.76rem;color:var(--ink-faint);text-align:center;padding:0 10px;">Need to lock, unlock, reset a PIN, or delete a profile? That stays in the Admin portal for extra security.</p>
+  `;
+}
+
+function renderManageChores() {
+  if (!state.manageTasks) { loadManageChores(); return `<div class="card" style="text-align:center;">Loading chores…</div>`; }
+  const { tasks, pending, error } = state.manageTasks;
+  const kidOptions = ['<option value="all">All kids</option>']
+    .concat(((state.manageKids && state.manageKids.kids) || []).map(k => `<option value="${k.userId}">${escapeHtml(k.name)}</option>`))
+    .join("");
+  return `
+    ${error ? `<div class="card empty-state">${escapeHtml(error)}</div>` : ""}
+    ${pending && pending.length ? `
+    <div class="card">
+      <h3 style="margin-top:0;">Pending approval</h3>
+      ${pending.map(c => `
+        <div class="card-flat" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <span>${escapeHtml(c.kidName)} — ${escapeHtml(c.taskTitle)} (⭐ ${c.starValue})</span>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="btn btn-primary btn-sm" data-mchore-approve="${c.completionId}">Approve</button>
+            <button class="btn btn-outline btn-sm" data-mchore-reject="${c.completionId}">Reject</button>
+          </div>
+        </div>`).join("")}
+    </div>` : ""}
+    <div class="card">
+      <h3 style="margin-top:0;">Add a chore</h3>
+      <label for="mtask-title">Title</label>
+      <input type="text" id="mtask-title" placeholder="e.g. Make your bed" />
+      <div class="field-row">
+        <div><label for="mtask-stars">Stars</label><input type="number" id="mtask-stars" min="1" value="5" /></div>
+        <div><label for="mtask-recurring">Repeats</label>
+          <select id="mtask-recurring">
+            <option value="none">One-time</option>
+            <option value="daily" selected>Daily</option>
+            <option value="weekly">Weekly</option>
+          </select>
+        </div>
+      </div>
+      <label for="mtask-assign">Assign to</label>
+      <select id="mtask-assign">${kidOptions}</select>
+      <button class="btn btn-primary btn-block" id="mtask-create-btn" style="margin-top:10px;">+ Add chore</button>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;">Chore catalog</h3>
+      ${tasks && tasks.length ? tasks.map(t => `
+        <div class="card-flat" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <span>${isActiveVal(t.active)?"":"⏸ "}${escapeHtml(t.title)} — ⭐ ${t.starValue} · ${t.recurring}</span>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="btn btn-outline btn-sm" data-mtask-toggle="${t.taskId}" data-active="${t.active}">${isActiveVal(t.active)?"Pause":"Resume"}</button>
+            <button class="btn btn-outline btn-sm" data-mtask-delete="${t.taskId}">Delete</button>
+          </div>
+        </div>`).join("") : `<p style="color:var(--ink-faint);margin:0;">No chores yet — add one above.</p>`}
+    </div>
+  `;
+}
+
+function renderManagePerks() {
+  if (!state.managePerks) { loadManagePerks(); return `<div class="card" style="text-align:center;">Loading rewards…</div>`; }
+  const { perks, pending, error } = state.managePerks;
+  const kidOptions = ['<option value="all">All kids</option>']
+    .concat(((state.manageKids && state.manageKids.kids) || []).map(k => `<option value="${k.userId}">${escapeHtml(k.name)}</option>`))
+    .join("");
+  return `
+    ${error ? `<div class="card empty-state">${escapeHtml(error)}</div>` : ""}
+    ${pending && pending.length ? `
+    <div class="card">
+      <h3 style="margin-top:0;">Pending redemptions</h3>
+      ${pending.map(r => `
+        <div class="card-flat" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <span>${escapeHtml(r.kidName)} — ${escapeHtml(r.perkTitle)} (⭐ ${r.starCost})</span>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="btn btn-primary btn-sm" data-mredeem-fulfill="${r.redemptionId}">Fulfill</button>
+            <button class="btn btn-outline btn-sm" data-mredeem-reject="${r.redemptionId}">Reject</button>
+          </div>
+        </div>`).join("")}
+    </div>` : ""}
+    <div class="card">
+      <h3 style="margin-top:0;">Add a reward</h3>
+      <label for="mperk-title">Title</label>
+      <input type="text" id="mperk-title" placeholder="e.g. Choose dinner one night" />
+      <label for="mperk-cost">Star cost</label>
+      <input type="number" id="mperk-cost" min="1" value="20" />
+      <label for="mperk-assign">Assign to</label>
+      <select id="mperk-assign">${kidOptions}</select>
+      <button class="btn btn-primary btn-block" id="mperk-create-btn" style="margin-top:10px;">+ Add reward</button>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;">Reward catalog</h3>
+      ${perks && perks.length ? perks.map(p => `
+        <div class="card-flat" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <span>${isActiveVal(p.active)?"":"⏸ "}${escapeHtml(p.title)} — ⭐ ${p.starCost}</span>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="btn btn-outline btn-sm" data-mperk-toggle="${p.perkId}" data-active="${p.active}">${isActiveVal(p.active)?"Pause":"Resume"}</button>
+            <button class="btn btn-outline btn-sm" data-mperk-delete="${p.perkId}">Delete</button>
+          </div>
+        </div>`).join("") : `<p style="color:var(--ink-faint);margin:0;">No rewards yet — add one above.</p>`}
+    </div>
+  `;
+}
+
+async function loadManageKids() {
+  const p = state.profile;
+  const res = await SavvioCloud.listMyKids(p.id, p.sessionToken);
+  state.manageKids = (res && res.ok) ? { kids: res.kids || [] } : { kids: [], error: (res && res.error) || "Couldn't load kids" };
+  render();
+}
+
+async function loadManageChores() {
+  const p = state.profile;
+  const [tasksRes, pendingRes] = await Promise.all([
+    SavvioCloud.parentListTasks(p.id, p.sessionToken),
+    SavvioCloud.parentListPendingCompletions(p.id, p.sessionToken),
+  ]);
+  state.manageTasks = {
+    tasks: (tasksRes && tasksRes.ok) ? tasksRes.tasks : [],
+    pending: (pendingRes && pendingRes.ok) ? pendingRes.completions : [],
+    error: (!tasksRes || !tasksRes.ok) ? ((tasksRes && tasksRes.error) || "Couldn't load chores") : null,
+  };
+  render();
+}
+
+async function loadManagePerks() {
+  const p = state.profile;
+  const [perksRes, pendingRes] = await Promise.all([
+    SavvioCloud.parentListPerks(p.id, p.sessionToken),
+    SavvioCloud.parentListPendingRedemptions(p.id, p.sessionToken),
+  ]);
+  state.managePerks = {
+    perks: (perksRes && perksRes.ok) ? perksRes.perks : [],
+    pending: (pendingRes && pendingRes.ok) ? pendingRes.redemptions : [],
+    error: (!perksRes || !perksRes.ok) ? ((perksRes && perksRes.error) || "Couldn't load rewards") : null,
+  };
+  render();
+}
+
+async function reviewManageCompletion(completionId, approve) {
+  const p = state.profile;
+  const res = await SavvioCloud.parentReviewCompletion(p.id, p.sessionToken, completionId, approve);
+  if (res && res.ok) { toast(approve ? "Approved — stars credited 🌟" : "Rejected"); state.manageTasks = null; loadManageChores(); }
+  else toast((res && res.error) || "Couldn't update that chore");
+}
+
+async function reviewManageRedemption(redemptionId, approve) {
+  const p = state.profile;
+  const res = await SavvioCloud.parentReviewRedemption(p.id, p.sessionToken, redemptionId, approve);
+  if (res && res.ok) { toast(approve ? "Marked fulfilled 🎁" : "Rejected — stars refunded"); state.managePerks = null; loadManagePerks(); }
+  else toast((res && res.error) || "Couldn't update that redemption");
+}
+
+// ---------------------------------------------------------------
 // Profile
 // ---------------------------------------------------------------
 function renderProfile() {
@@ -1330,6 +1548,16 @@ function bindScreenEvents() {
     state.pinBuffer = "";
     go("pin-login");
   });
+
+  document.querySelectorAll("[data-role]").forEach(el => el.onclick = () => {
+    state.onboard.role = el.dataset.role;
+    render();
+  });
+  const roleNext = document.getElementById("ob-role-next");
+  if (roleNext) roleNext.onclick = () => {
+    if (state.onboard.role === "parent") { state.onboard.ageGroup = "teens"; go("onboard-avatar"); }
+    else { go("onboard-age"); }
+  };
 
   document.querySelectorAll("[data-age]").forEach(el => el.onclick = () => {
     state.onboard.ageGroup = el.dataset.age;
@@ -1451,6 +1679,79 @@ function bindScreenEvents() {
   if (openPerksBtn) openPerksBtn.onclick = () => { state.perksData = null; go("perks"); };
   document.querySelectorAll("[data-task-done]").forEach(el => el.onclick = () => markTaskDone(el.dataset.taskDone));
   document.querySelectorAll("[data-perk-redeem]").forEach(el => el.onclick = () => redeemPerkFlow(el.dataset.perkRedeem));
+
+  // Manage Family (parent role)
+  document.querySelectorAll("[data-managetab]").forEach(el => el.onclick = () => {
+    state.manageTab = el.dataset.managetab;
+    if (state.manageTab === "kids" && !state.manageKids) loadManageKids();
+    if (state.manageTab === "chores" && !state.manageTasks) loadManageChores();
+    if (state.manageTab === "perks" && !state.managePerks) loadManagePerks();
+    render();
+  });
+  document.querySelectorAll("[data-kid-approve]").forEach(el => el.onclick = async () => {
+    const p = state.profile;
+    const res = await SavvioCloud.parentApproveKid(p.id, p.sessionToken, el.dataset.kidApprove);
+    if (res && res.ok) { toast("Approved 🎉"); state.manageKids = null; loadManageKids(); } else toast((res && res.error) || "Couldn't approve");
+  });
+  document.querySelectorAll("[data-kid-reject]").forEach(el => el.onclick = async () => {
+    if (!confirm("Reject this profile?")) return;
+    const p = state.profile;
+    const res = await SavvioCloud.parentRejectKid(p.id, p.sessionToken, el.dataset.kidReject);
+    if (res && res.ok) { toast("Rejected"); state.manageKids = null; loadManageKids(); } else toast((res && res.error) || "Couldn't reject");
+  });
+
+  const mtaskCreateBtn = document.getElementById("mtask-create-btn");
+  if (mtaskCreateBtn) mtaskCreateBtn.onclick = async () => {
+    const p = state.profile;
+    const title = document.getElementById("mtask-title").value.trim();
+    const starValue = document.getElementById("mtask-stars").value;
+    const recurring = document.getElementById("mtask-recurring").value;
+    const assignedTo = document.getElementById("mtask-assign").value;
+    if (!title || !starValue) { toast("Enter a title and star value"); return; }
+    const res = await SavvioCloud.parentCreateTask(p.id, p.sessionToken, title, starValue, assignedTo, recurring);
+    if (res && res.ok) { toast("Chore added"); state.manageTasks = null; loadManageChores(); } else toast((res && res.error) || "Couldn't add chore");
+  };
+  document.querySelectorAll("[data-mchore-approve]").forEach(el => el.onclick = () => reviewManageCompletion(el.dataset.mchoreApprove, true));
+  document.querySelectorAll("[data-mchore-reject]").forEach(el => el.onclick = () => reviewManageCompletion(el.dataset.mchoreReject, false));
+  document.querySelectorAll("[data-mtask-toggle]").forEach(el => el.onclick = async () => {
+    const p = state.profile;
+    const active = !isActiveVal(el.dataset.active);
+    const res = await SavvioCloud.parentUpdateTask(p.id, p.sessionToken, el.dataset.mtaskToggle, { active });
+    if (res && res.ok) { state.manageTasks = null; loadManageChores(); } else toast((res && res.error) || "Couldn't update chore");
+  });
+  document.querySelectorAll("[data-mtask-delete]").forEach(el => el.onclick = () => {
+    if (!confirm("Delete this chore?")) return;
+    const p = state.profile;
+    SavvioCloud.parentDeleteTask(p.id, p.sessionToken, el.dataset.mtaskDelete).then(res => {
+      if (res && res.ok) { toast("Deleted"); state.manageTasks = null; loadManageChores(); } else toast((res && res.error) || "Couldn't delete chore");
+    });
+  });
+
+  const mperkCreateBtn = document.getElementById("mperk-create-btn");
+  if (mperkCreateBtn) mperkCreateBtn.onclick = async () => {
+    const p = state.profile;
+    const title = document.getElementById("mperk-title").value.trim();
+    const starCost = document.getElementById("mperk-cost").value;
+    const assignedTo = document.getElementById("mperk-assign").value;
+    if (!title || !starCost) { toast("Enter a title and star cost"); return; }
+    const res = await SavvioCloud.parentCreatePerk(p.id, p.sessionToken, title, starCost, assignedTo);
+    if (res && res.ok) { toast("Reward added"); state.managePerks = null; loadManagePerks(); } else toast((res && res.error) || "Couldn't add reward");
+  };
+  document.querySelectorAll("[data-mredeem-fulfill]").forEach(el => el.onclick = () => reviewManageRedemption(el.dataset.mredeemFulfill, true));
+  document.querySelectorAll("[data-mredeem-reject]").forEach(el => el.onclick = () => reviewManageRedemption(el.dataset.mredeemReject, false));
+  document.querySelectorAll("[data-mperk-toggle]").forEach(el => el.onclick = async () => {
+    const p = state.profile;
+    const active = !isActiveVal(el.dataset.active);
+    const res = await SavvioCloud.parentUpdatePerk(p.id, p.sessionToken, el.dataset.mperkToggle, { active });
+    if (res && res.ok) { state.managePerks = null; loadManagePerks(); } else toast((res && res.error) || "Couldn't update reward");
+  });
+  document.querySelectorAll("[data-mperk-delete]").forEach(el => el.onclick = () => {
+    if (!confirm("Delete this reward?")) return;
+    const p = state.profile;
+    SavvioCloud.parentDeletePerk(p.id, p.sessionToken, el.dataset.mperkDelete).then(res => {
+      if (res && res.ok) { toast("Deleted"); state.managePerks = null; loadManagePerks(); } else toast((res && res.error) || "Couldn't delete reward");
+    });
+  });
   const editProfileBtn = document.getElementById("edit-profile-btn");
   if (editProfileBtn) editProfileBtn.onclick = () => editProfileModal();
   const changePinBtn = document.getElementById("change-pin-btn");
@@ -1464,9 +1765,9 @@ function bindScreenEvents() {
     render();
   });
   const switchBtn = document.getElementById("switch-profile-btn");
-  if (switchBtn) switchBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; state.choresData = null; state.perksData = null; go("splash"); };
+  if (switchBtn) switchBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; state.choresData = null; state.perksData = null; state.manageKids = null; state.manageTasks = null; state.managePerks = null; state.manageTab = "kids"; go("splash"); };
   const logoutBtn = document.getElementById("logout-btn");
-  if (logoutBtn) logoutBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; state.choresData = null; state.perksData = null; go("splash"); };
+  if (logoutBtn) logoutBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; state.choresData = null; state.perksData = null; state.manageKids = null; state.manageTasks = null; state.managePerks = null; state.manageTab = "kids"; go("splash"); };
 }
 
 async function unlockProfile(profileId, pin) {
@@ -1485,6 +1786,7 @@ async function unlockProfile(profileId, pin) {
       p.sessionToken = res.sessionToken;
       p.cloudStatus = res.profile.status;
       p.stars = res.profile.stars || 0;
+      p.role = res.profile.role || p.role || "kid";
       p.locked = false;
       state.profile = p;
       SavvioStorage.saveProfile(p);

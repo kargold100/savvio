@@ -71,8 +71,9 @@ and redeploy to GitHub Pages as usual.
 ## 5. Try it
 
 - Open the app, create a profile (tap "Log in or create profile", enter a
-  name + PIN it doesn't recognise, confirm you want to create one) — it
-  registers in the background as `pending`.
+  name + PIN it doesn't recognise, confirm you want to create one, then
+  choose **Parent/Guardian** or **Kid or Teen**) — it registers in the
+  background as `pending`.
 - Open `admin/admin.html`, log in with the admin username/password from
   step 2, and you'll see that profile waiting for approval.
 - Approve it. From here: lock, unlock, reject, reset PIN, and approve all
@@ -81,15 +82,16 @@ and redeploy to GitHub Pages as usual.
 - On a second device, open the app and tap "Log in or create profile" again
   — same name and PIN logs straight in and pulls down their goals, budget,
   lessons, and quiz history.
-- In the Admin portal's **Chores** tab, add a chore (e.g. "Make your bed",
-  5 stars, daily) assigned to that kid or to "All kids". In the app, they'll
-  see it under Rewards → View Chores, tap "Mark done", and it'll show up in
-  your Chores tab as pending — approve it and the stars land in their
-  account automatically.
-- In the **Rewards** admin tab (perks), add something they can spend stars
-  on. They'll see it under Rewards → Redeem Rewards once they have enough
-  stars; redeeming creates a pending request you fulfil (or reject, which
-  refunds the stars) from that same tab.
+- **If you approved a parent profile:** log in as them, and the bottom nav
+  shows a **Manage** tab instead of Rewards. From there they can see all
+  kid profiles, approve/reject new kid sign-ups, set up chores and rewards,
+  and approve chore completions or fulfil reward redemptions — all inside
+  the regular app, no separate admin login needed.
+- **If you approved a kid profile:** in the app, they'll see chores under
+  Rewards → View Chores, tap "Mark done", and it'll show up in a parent's
+  Manage tab (or the Admin portal's Chores tab) as pending — approve it and
+  the stars land in their account automatically. Same idea for redeeming
+  rewards under Rewards → Redeem Rewards.
 
 ## Notes
 
@@ -99,14 +101,28 @@ and redeploy to GitHub Pages as usual.
 - PINs and the admin password are never stored in plain text — Code.gs
   salts and SHA-256-hashes them before they touch the sheet.
 - If `PROXY_URL` is left blank in `cloud.js`, the whole app still works —
-  it just stays local-only on that device, same as before. Chores and
-  Rewards specifically need the cloud connected (they only make sense with
-  a parent verifying them), and show a friendly message until then.
+  it just stays local-only on that device, same as before. Chores, Rewards,
+  and Manage Family specifically need the cloud connected (they only make
+  sense with a parent verifying them), and show a friendly message until
+  then.
 - A profile locked from the Admin portal is enforced the next time that
   device is online (login or app-open triggers a status check). Savvio is a
   family tool, not a bank — this is "good enough" household-level security,
   not something to rely on for anything sensitive.
 - Chores are parent-verified by design: marking a chore done never credits
-  stars by itself — an admin approving it does. Redeeming a reward deducts
-  stars immediately (so a kid can't request the same reward twice with
-  money they don't have) and refunds automatically if you reject it.
+  stars by itself — a parent or admin approving it does. Redeeming a reward
+  deducts stars immediately (so a kid can't request the same reward twice
+  with money they don't have) and refunds automatically if rejected.
+- **Parent vs Admin — why both exist:** a parent profile is secured the
+  same way as a kid's — a 4-digit PIN. That's fine for day-to-day things
+  (chores, rewards, approving a new kid), but too weak to gate account
+  recovery. So locking, unlocking, resetting a PIN, and deleting a profile
+  stay Admin-portal-only, behind its separate username/password login. A
+  parent also can't approve *another* parent's sign-up in-app — new parent
+  profiles always need Admin-portal approval, so a stranger who finds your
+  app URL can't self-register as "parent" and get in that way. In a
+  single-family deployment (the default for this whole project — one
+  Google Sheet per household) every parent profile automatically manages
+  every kid profile in that sheet; there's no separate "linking" step
+  needed. If you ever share one deployment across multiple unrelated
+  families, that's a bigger change this version doesn't cover.

@@ -116,6 +116,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .status-pending{ background:#FFF1DE; color:#8A5A00; }
 .status-active{ background: var(--primary-tint); color: var(--primary-dark); }
 .status-locked{ background:#FDE4E4; color: var(--danger); }
+.status-rejected{ background:#F1EAF7; color:#6B3FA0; }
 .topbar .icon-btn{
   background: var(--surface); border:1px solid var(--border);
   width:40px; height:40px; border-radius: var(--radius-pill);

@@ -1,7 +1,8 @@
 /**
  * Savvio — Apps Script backend
  * ---------------------------------------------------------------
- * Sheets used (auto-created on first run): Users, Admins, AuditLog
+ * Sheets used (auto-created on first run):
+ *   Users, Admins, AuditLog, Tasks, Completions, Perks, Redemptions
  *
  * SECURITY MODEL
  * - PINs and the admin password arrive as plain values in the
@@ -10,11 +11,23 @@
  *   never written to a sheet or logged.
  * - Every user row gets its own random salt (registerProfile).
  * - Logins issue a random session token with an expiry; every
- *   sync/restore call must present a still-valid token.
+ *   sync/restore/chore/perk call must present a still-valid token.
  * - 5 wrong PINs in a row auto-locks the profile server-side —
  *   an admin has to unlock it or reset the PIN.
  * - Admin actions all require a valid adminSessionToken and are
  *   written to the AuditLog sheet (who did what, to whom, when).
+ *
+ * CHORES → STARS → REWARDS
+ * - Admin defines Tasks (chores) with a star value, and Perks
+ *   (rewards) with a star cost. Either can be assigned to one kid
+ *   or to "all".
+ * - A kid marking a chore done creates a *pending* Completion —
+ *   stars are only credited once an admin approves it. This keeps
+ *   the whole loop parent-verified, same as a real chore chart.
+ * - Redeeming a perk deducts stars immediately (so a kid can't
+ *   overspend across several pending requests) and creates a
+ *   pending Redemption; if an admin rejects it, the stars are
+ *   refunded automatically.
  *
  * ONE-TIME SETUP — see SETUP.md for the full walkthrough.
  */
@@ -22,6 +35,11 @@
 const SHEET_USERS = "Users";
 const SHEET_ADMINS = "Admins";
 const SHEET_AUDIT = "AuditLog";
+const SHEET_TASKS = "Tasks";
+const SHEET_COMPLETIONS = "Completions";
+const SHEET_PERKS = "Perks";
+const SHEET_REDEMPTIONS = "Redemptions";
+
 const SESSION_HOURS = 24;
 const ADMIN_SESSION_HOURS = 6;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -31,14 +49,18 @@ const MAX_FAILED_ATTEMPTS = 5;
 // ADMIN_BOOTSTRAP_PASSWORD. Script Properties always win if set — see
 // SETUP.md. NOTE: if this file is pushed to a public GitHub repo, these
 // defaults are visible to anyone who looks at the repo. Change the admin
-// password from the Admin portal (or Script Properties) right after your
-// first login if that matters to you.
+// password from Script Properties right after your first login if that
+// matters to you.
 const DEFAULT_ADMIN_USERNAME = "sav_admin";
 const DEFAULT_ADMIN_PASSWORD = "SavAdmin123$";
 
-const USER_HEADERS = ["userId","name","ageGroup","avatar","pinHash","pinSalt","status","xp","streak","lastActiveDate","createdDate","dataJson","sessionToken","sessionExpiry","failedAttempts"];
+const USER_HEADERS = ["userId","name","ageGroup","avatar","pinHash","pinSalt","status","xp","streak","stars","lastActiveDate","createdDate","dataJson","sessionToken","sessionExpiry","failedAttempts"];
 const ADMIN_HEADERS = ["adminId","username","passwordHash","passwordSalt","createdDate","sessionToken","sessionExpiry"];
 const AUDIT_HEADERS = ["timestamp","admin","action","targetUserId","details"];
+const TASK_HEADERS = ["taskId","title","starValue","assignedTo","recurring","active","createdDate"];
+const COMPLETION_HEADERS = ["completionId","taskId","userId","taskTitle","starValue","periodKey","status","submittedDate","reviewedDate"];
+const PERK_HEADERS = ["perkId","title","starCost","assignedTo","active","createdDate"];
+const REDEMPTION_HEADERS = ["redemptionId","perkId","userId","perkTitle","starCost","status","requestedDate","reviewedDate"];
 
 // ---------------------------------------------------------------
 // Entry points
@@ -61,13 +83,33 @@ function doPost(e) {
       case "updateProfile":   return jsonOut(updateProfile(body));
       case "changePin":       return jsonOut(changePin(body));
 
+      case "listTasks":    return jsonOut(listTasks(body));
+      case "completeTask": return jsonOut(completeTask(body));
+      case "listPerks":    return jsonOut(listPerks(body));
+      case "redeemPerk":   return jsonOut(redeemPerk(body));
+
       case "adminLogin":        return jsonOut(adminLogin(body));
       case "adminListUsers":    return jsonOut(adminListUsers(body));
       case "adminApproveUser":  return jsonOut(adminSetStatus(body, "active", "approveUser"));
+      case "adminRejectUser":   return jsonOut(adminSetStatus(body, "rejected", "rejectUser"));
       case "adminLockUser":     return jsonOut(adminSetStatus(body, "locked", "lockUser"));
       case "adminUnlockUser":   return jsonOut(adminSetStatus(body, "active", "unlockUser"));
       case "adminResetPin":     return jsonOut(adminResetPin(body));
       case "adminDeleteUser":   return jsonOut(adminDeleteUser(body));
+
+      case "adminListTasks":               return jsonOut(adminListTasks(body));
+      case "adminCreateTask":              return jsonOut(adminCreateTask(body));
+      case "adminUpdateTask":              return jsonOut(adminUpdateTask(body));
+      case "adminDeleteTask":              return jsonOut(adminDeleteTask(body));
+      case "adminListPendingCompletions":  return jsonOut(adminListPendingCompletions(body));
+      case "adminReviewCompletion":        return jsonOut(adminReviewCompletion(body));
+
+      case "adminListPerks":               return jsonOut(adminListPerks(body));
+      case "adminCreatePerk":              return jsonOut(adminCreatePerk(body));
+      case "adminUpdatePerk":              return jsonOut(adminUpdatePerk(body));
+      case "adminDeletePerk":              return jsonOut(adminDeletePerk(body));
+      case "adminListPendingRedemptions":  return jsonOut(adminListPendingRedemptions(body));
+      case "adminReviewRedemption":        return jsonOut(adminReviewRedemption(body));
 
       default: return jsonOut({ ok: false, error: "Unknown action" });
     }
@@ -85,7 +127,13 @@ function jsonOut(obj) {
 }
 
 // ---------------------------------------------------------------
-// Sheet helpers
+// Generic sheet helpers
+// These are schema-migration-safe: ensureHeaders() only ever
+// *appends* missing columns, and reads/writes look columns up by
+// name (headerMap) rather than assuming a fixed position. That
+// means adding a new field later (like "stars" here) doesn't
+// break an already-deployed sheet — existing columns are left
+// exactly where they are.
 // ---------------------------------------------------------------
 function sheet(name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -95,38 +143,72 @@ function sheet(name) {
 }
 
 function ensureHeaders(sh, headers) {
-  const first = sh.getRange(1, 1, 1, headers.length).getValues()[0];
-  if (first.join("") === "") sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+  const lastCol = sh.getLastColumn();
+  if (lastCol === 0) { sh.getRange(1, 1, 1, headers.length).setValues([headers]); return; }
+  const existing = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  headers.forEach(h => {
+    if (existing.indexOf(h) === -1) {
+      const col = sh.getLastColumn() + 1;
+      sh.getRange(1, col).setValue(h);
+      existing.push(h);
+    }
+  });
 }
 
-function usersSheet() { const sh = sheet(SHEET_USERS); ensureHeaders(sh, USER_HEADERS); return sh; }
-function adminsSheet() { const sh = sheet(SHEET_ADMINS); ensureHeaders(sh, ADMIN_HEADERS); bootstrapAdmin(sh); return sh; }
-function auditSheet() { const sh = sheet(SHEET_AUDIT); ensureHeaders(sh, AUDIT_HEADERS); return sh; }
+function headerMap(sh) {
+  const lastCol = sh.getLastColumn();
+  const existing = lastCol ? sh.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  const map = {};
+  existing.forEach((h, i) => { if (h) map[h] = i; });
+  return map;
+}
 
 function readRows(sh, headers) {
+  const map = headerMap(sh);
+  const idCol = map[headers[0]];
   const values = sh.getDataRange().getValues();
   const rows = [];
   for (let i = 1; i < values.length; i++) {
-    if (!values[i][0]) continue;
+    if (idCol === undefined || !values[i][idCol]) continue;
     const obj = {};
-    headers.forEach((h, idx) => obj[h] = values[i][idx]);
+    headers.forEach(h => obj[h] = (map[h] !== undefined ? values[i][map[h]] : ""));
     obj._row = i + 1;
     rows.push(obj);
   }
   return rows;
 }
 
+function writeRow(sh, headers, row) {
+  const map = headerMap(sh);
+  headers.forEach(h => {
+    if (map[h] !== undefined) sh.getRange(row._row, map[h] + 1).setValue(row[h] !== undefined ? row[h] : "");
+  });
+}
+
+function appendRowObj(sh, headers, obj) {
+  const map = headerMap(sh);
+  const width = Math.max(sh.getLastColumn(), headers.length);
+  const rowArr = new Array(width).fill("");
+  headers.forEach(h => { if (map[h] !== undefined) rowArr[map[h]] = (obj[h] !== undefined ? obj[h] : ""); });
+  sh.appendRow(rowArr);
+}
+
+function usersSheet() { const sh = sheet(SHEET_USERS); ensureHeaders(sh, USER_HEADERS); return sh; }
+function adminsSheet() { const sh = sheet(SHEET_ADMINS); ensureHeaders(sh, ADMIN_HEADERS); bootstrapAdmin(sh); return sh; }
+function auditSheet() { const sh = sheet(SHEET_AUDIT); ensureHeaders(sh, AUDIT_HEADERS); return sh; }
+function tasksSheet() { const sh = sheet(SHEET_TASKS); ensureHeaders(sh, TASK_HEADERS); return sh; }
+function completionsSheet() { const sh = sheet(SHEET_COMPLETIONS); ensureHeaders(sh, COMPLETION_HEADERS); return sh; }
+function perksSheet() { const sh = sheet(SHEET_PERKS); ensureHeaders(sh, PERK_HEADERS); return sh; }
+function redemptionsSheet() { const sh = sheet(SHEET_REDEMPTIONS); ensureHeaders(sh, REDEMPTION_HEADERS); return sh; }
+
 function findUser(userId) {
   return readRows(usersSheet(), USER_HEADERS).find(r => r.userId === userId) || null;
 }
+function writeUserRow(row) { writeRow(usersSheet(), USER_HEADERS, row); }
+function appendUserRow(obj) { appendRowObj(usersSheet(), USER_HEADERS, obj); }
 
-function writeUserRow(row) {
-  usersSheet().getRange(row._row, 1, 1, USER_HEADERS.length).setValues([USER_HEADERS.map(h => row[h])]);
-}
-
-function appendUserRow(obj) {
-  usersSheet().appendRow(USER_HEADERS.map(h => (obj[h] !== undefined ? obj[h] : "")));
-}
+function isTrue(v) { return v === true || v === "TRUE" || v === "true"; }
+function visibleTo(row, userId) { return row.assignedTo === "all" || row.assignedTo === userId; }
 
 // ---------------------------------------------------------------
 // Crypto helpers — server-side salted SHA-256 only
@@ -142,10 +224,18 @@ function randomToken() { return Utilities.getUuid() + Utilities.getUuid(); }
 function nowIso() { return new Date().toISOString(); }
 function hoursFromNow(h) { return new Date(Date.now() + h * 3600 * 1000).toISOString(); }
 
+function periodKeyFor(recurring) {
+  const tz = Session.getScriptTimeZone();
+  const now = new Date();
+  if (recurring === "daily") return Utilities.formatDate(now, tz, "yyyy-MM-dd");
+  if (recurring === "weekly") return Utilities.formatDate(now, tz, "YYYY-'W'ww");
+  return "once"; // a one-off task can only ever be completed a single time
+}
+
 function publicUser(user) {
   return {
     userId: user.userId, name: user.name, ageGroup: user.ageGroup, avatar: user.avatar,
-    status: user.status, xp: user.xp, streak: user.streak,
+    status: user.status, xp: user.xp, streak: user.streak, stars: Number(user.stars) || 0,
     lastActiveDate: user.lastActiveDate, createdDate: user.createdDate,
   };
 }
@@ -163,14 +253,28 @@ function registerProfile(body) {
   appendUserRow({
     userId, name, ageGroup, avatar,
     pinHash: hashWithSalt(pin, salt), pinSalt: salt,
-    status: "pending", xp: 0, streak: 0, lastActiveDate: "", createdDate: nowIso(),
+    status: "pending", xp: 0, streak: 0, stars: 0, lastActiveDate: "", createdDate: nowIso(),
     dataJson: "{}", sessionToken, sessionExpiry, failedAttempts: 0,
   });
+  notifyAdminNewSignup(name);
   // New profiles start "pending" so they show up for parent review in the
   // Admin portal, but that status doesn't block anything technically — sync
-  // and restore work right away. Approve/lock are for parental oversight,
-  // not a signup gate.
+  // and chores/perks all work right away. Approve/reject are for parental
+  // oversight and to trigger the "you're approved!" notice in-app.
   return { ok: true, status: "pending", sessionToken };
+}
+
+function notifyAdminNewSignup(name) {
+  const email = PropertiesService.getScriptProperties().getProperty("ADMIN_NOTIFY_EMAIL");
+  if (!email) return;
+  try {
+    MailApp.sendEmail({
+      to: email,
+      subject: "Savvio: new profile waiting for approval",
+      body: name + " just created a Savvio profile and is waiting for approval.\n\nOpen the Admin portal to approve, reject, lock, or manage it.",
+      name: "Savvio Admin Alerts",
+    });
+  } catch (e) { /* best effort — a failed email shouldn't block signup */ }
 }
 
 function loginProfile(body) {
@@ -199,12 +303,6 @@ function loginProfile(body) {
   return { ok: true, sessionToken: user.sessionToken, profile: publicUser(user) };
 }
 
-function checkStatus(body) {
-  const user = findUser(body.userId);
-  if (!user) return { ok: false, error: "Profile not found" };
-  return { ok: true, status: user.status };
-}
-
 // Lets the client log in with just a name + PIN instead of the internal
 // userId — used for "log in on a new device" and "is this profile new".
 function loginByName(body) {
@@ -229,9 +327,6 @@ function loginByName(body) {
     return { ok: false, error: "locked", locked: true };
   }
 
-  // Name matched but no PIN matched any non-locked row — count it as a
-  // failed attempt against the first match, same anti-bruteforce rule as
-  // the ID-based login.
   const target = matches[0];
   const attempts = Number(target.failedAttempts || 0) + 1;
   target.failedAttempts = attempts;
@@ -242,6 +337,12 @@ function loginByName(body) {
     error: attempts >= MAX_FAILED_ATTEMPTS ? "locked" : "Incorrect PIN",
     locked: attempts >= MAX_FAILED_ATTEMPTS,
   };
+}
+
+function checkStatus(body) {
+  const user = findUser(body.userId);
+  if (!user) return { ok: false, error: "Profile not found" };
+  return { ok: true, status: user.status, stars: Number(user.stars) || 0 };
 }
 
 function validSession(user, token) {
@@ -258,7 +359,7 @@ function syncProfile(body) {
   user.xp = xp; user.streak = streak; user.lastActiveDate = lastActiveDate;
   user.dataJson = JSON.stringify(dataJson || {});
   writeUserRow(user);
-  return { ok: true, status: user.status };
+  return { ok: true, status: user.status, stars: Number(user.stars) || 0 };
 }
 
 function restoreProfile(body) {
@@ -298,11 +399,109 @@ function changePin(body) {
 }
 
 // ---------------------------------------------------------------
+// Chores (Tasks → Completions)
+// ---------------------------------------------------------------
+function listTasks(body) {
+  const { userId, sessionToken } = body;
+  const user = findUser(userId);
+  if (!user) return { ok: false, error: "Profile not found" };
+  if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
+
+  const tasks = readRows(tasksSheet(), TASK_HEADERS).filter(t => isTrue(t.active) && visibleTo(t, userId));
+  const completions = readRows(completionsSheet(), COMPLETION_HEADERS).filter(c => c.userId === userId);
+
+  const out = tasks.map(t => {
+    const key = periodKeyFor(t.recurring);
+    const mine = completions
+      .filter(c => c.taskId === t.taskId && c.periodKey === key)
+      .sort((a, b) => String(b.submittedDate).localeCompare(String(a.submittedDate)))[0];
+    return {
+      taskId: t.taskId, title: t.title, starValue: Number(t.starValue) || 0, recurring: t.recurring,
+      status: mine ? mine.status : "none", // none | pending | approved | rejected
+    };
+  });
+
+  const history = completions
+    .sort((a, b) => String(b.reviewedDate || b.submittedDate).localeCompare(String(a.reviewedDate || a.submittedDate)))
+    .slice(0, 15)
+    .map(c => ({ completionId: c.completionId, taskTitle: c.taskTitle, starValue: Number(c.starValue) || 0, status: c.status, submittedDate: c.submittedDate, reviewedDate: c.reviewedDate }));
+
+  return { ok: true, tasks: out, history, stars: Number(user.stars) || 0 };
+}
+
+function completeTask(body) {
+  const { userId, sessionToken, taskId } = body;
+  const user = findUser(userId);
+  if (!user) return { ok: false, error: "Profile not found" };
+  if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
+  if (user.status === "locked") return { ok: false, error: "locked", locked: true };
+
+  const task = readRows(tasksSheet(), TASK_HEADERS).find(t => t.taskId === taskId);
+  if (!task) return { ok: false, error: "Chore not found" };
+
+  const key = periodKeyFor(task.recurring);
+  const dup = readRows(completionsSheet(), COMPLETION_HEADERS)
+    .find(c => c.taskId === taskId && c.userId === userId && c.periodKey === key && c.status !== "rejected");
+  if (dup) return { ok: false, error: "Already submitted for this period" };
+
+  appendRowObj(completionsSheet(), COMPLETION_HEADERS, {
+    completionId: Utilities.getUuid(), taskId, userId, taskTitle: task.title, starValue: task.starValue,
+    periodKey: key, status: "pending", submittedDate: nowIso(), reviewedDate: "",
+  });
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------
+// Perks / rewards (Perks → Redemptions)
+// ---------------------------------------------------------------
+function listPerks(body) {
+  const { userId, sessionToken } = body;
+  const user = findUser(userId);
+  if (!user) return { ok: false, error: "Profile not found" };
+  if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
+
+  const perks = readRows(perksSheet(), PERK_HEADERS).filter(p => isTrue(p.active) && visibleTo(p, userId));
+  const redemptions = readRows(redemptionsSheet(), REDEMPTION_HEADERS).filter(r => r.userId === userId);
+  const pendingPerkIds = redemptions.filter(r => r.status === "pending").map(r => r.perkId);
+
+  const out = perks.map(p => ({
+    perkId: p.perkId, title: p.title, starCost: Number(p.starCost) || 0,
+    pending: pendingPerkIds.indexOf(p.perkId) !== -1,
+  }));
+
+  const history = redemptions
+    .sort((a, b) => String(b.reviewedDate || b.requestedDate).localeCompare(String(a.reviewedDate || a.requestedDate)))
+    .slice(0, 15)
+    .map(r => ({ redemptionId: r.redemptionId, perkTitle: r.perkTitle, starCost: Number(r.starCost) || 0, status: r.status, requestedDate: r.requestedDate, reviewedDate: r.reviewedDate }));
+
+  return { ok: true, perks: out, history, stars: Number(user.stars) || 0 };
+}
+
+function redeemPerk(body) {
+  const { userId, sessionToken, perkId } = body;
+  const user = findUser(userId);
+  if (!user) return { ok: false, error: "Profile not found" };
+  if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
+  if (user.status === "locked") return { ok: false, error: "locked", locked: true };
+
+  const perk = readRows(perksSheet(), PERK_HEADERS).find(p => p.perkId === perkId);
+  if (!perk) return { ok: false, error: "Reward not found" };
+  const cost = Number(perk.starCost) || 0;
+  const balance = Number(user.stars) || 0;
+  if (balance < cost) return { ok: false, error: "Not enough stars yet" };
+
+  user.stars = balance - cost;
+  writeUserRow(user);
+  appendRowObj(redemptionsSheet(), REDEMPTION_HEADERS, {
+    redemptionId: Utilities.getUuid(), perkId, userId, perkTitle: perk.title, starCost: cost,
+    status: "pending", requestedDate: nowIso(), reviewedDate: "",
+  });
+  return { ok: true, stars: user.stars };
+}
+
+// ---------------------------------------------------------------
 // Admin bootstrap & auth
 // ---------------------------------------------------------------
-// The very first admin account is seeded once from Script
-// Properties (set these in Project Settings, not in code) so no
-// credential ever lives in a file that gets committed to GitHub.
 function bootstrapAdmin(sh) {
   const rows = readRows(sh, ADMIN_HEADERS);
   if (rows.length > 0) return;
@@ -325,7 +524,7 @@ function adminLogin(body) {
   if (hashWithSalt(password, admin.passwordSalt) !== admin.passwordHash) return { ok: false, error: "Invalid credentials" };
   admin.sessionToken = randomToken();
   admin.sessionExpiry = hoursFromNow(ADMIN_SESSION_HOURS);
-  adminsSheet().getRange(admin._row, 1, 1, ADMIN_HEADERS.length).setValues([ADMIN_HEADERS.map(h => admin[h])]);
+  writeRow(adminsSheet(), ADMIN_HEADERS, admin);
   return { ok: true, adminSessionToken: admin.sessionToken, username: admin.username };
 }
 
@@ -342,11 +541,13 @@ function requireAdmin(body) {
 }
 
 function logAudit(admin, action, targetUserId, details) {
-  auditSheet().appendRow([nowIso(), admin.username, action, targetUserId || "", details || ""]);
+  appendRowObj(auditSheet(), AUDIT_HEADERS, {
+    timestamp: nowIso(), admin: admin.username, action, targetUserId: targetUserId || "", details: details || "",
+  });
 }
 
 // ---------------------------------------------------------------
-// Admin actions
+// Admin: user management
 // ---------------------------------------------------------------
 function adminListUsers(body) {
   requireAdmin(body);
@@ -385,5 +586,138 @@ function adminDeleteUser(body) {
   if (!user) return { ok: false, error: "Profile not found" };
   usersSheet().deleteRow(user._row);
   logAudit(admin, "deleteUser", body.userId, "");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------
+// Admin: chores (Tasks + Completions)
+// ---------------------------------------------------------------
+function adminListTasks(body) {
+  requireAdmin(body);
+  return { ok: true, tasks: readRows(tasksSheet(), TASK_HEADERS) };
+}
+
+function adminCreateTask(body) {
+  const admin = requireAdmin(body);
+  const { title, starValue, assignedTo, recurring } = body;
+  if (!title || !starValue) return { ok: false, error: "Missing fields" };
+  appendRowObj(tasksSheet(), TASK_HEADERS, {
+    taskId: Utilities.getUuid(), title, starValue: Number(starValue) || 0,
+    assignedTo: assignedTo || "all", recurring: recurring || "none", active: true, createdDate: nowIso(),
+  });
+  logAudit(admin, "createTask", "", title);
+  return { ok: true };
+}
+
+function adminUpdateTask(body) {
+  const admin = requireAdmin(body);
+  const task = readRows(tasksSheet(), TASK_HEADERS).find(t => t.taskId === body.taskId);
+  if (!task) return { ok: false, error: "Chore not found" };
+  if (body.title !== undefined) task.title = body.title;
+  if (body.starValue !== undefined) task.starValue = Number(body.starValue) || 0;
+  if (body.assignedTo !== undefined) task.assignedTo = body.assignedTo;
+  if (body.recurring !== undefined) task.recurring = body.recurring;
+  if (body.active !== undefined) task.active = body.active;
+  writeRow(tasksSheet(), TASK_HEADERS, task);
+  logAudit(admin, "updateTask", "", task.title);
+  return { ok: true };
+}
+
+function adminDeleteTask(body) {
+  const admin = requireAdmin(body);
+  const task = readRows(tasksSheet(), TASK_HEADERS).find(t => t.taskId === body.taskId);
+  if (!task) return { ok: false, error: "Chore not found" };
+  tasksSheet().deleteRow(task._row);
+  logAudit(admin, "deleteTask", "", task.title);
+  return { ok: true };
+}
+
+function adminListPendingCompletions(body) {
+  requireAdmin(body);
+  const users = readRows(usersSheet(), USER_HEADERS);
+  const nameFor = uid => { const u = users.find(x => x.userId === uid); return u ? u.name : uid; };
+  const pending = readRows(completionsSheet(), COMPLETION_HEADERS).filter(c => c.status === "pending");
+  return { ok: true, completions: pending.map(c => Object.assign({}, c, { kidName: nameFor(c.userId) })) };
+}
+
+function adminReviewCompletion(body) {
+  const admin = requireAdmin(body);
+  const { completionId, approve } = body;
+  const c = readRows(completionsSheet(), COMPLETION_HEADERS).find(x => x.completionId === completionId);
+  if (!c) return { ok: false, error: "Not found" };
+  c.status = approve ? "approved" : "rejected";
+  c.reviewedDate = nowIso();
+  writeRow(completionsSheet(), COMPLETION_HEADERS, c);
+  if (approve) {
+    const user = findUser(c.userId);
+    if (user) { user.stars = (Number(user.stars) || 0) + (Number(c.starValue) || 0); writeUserRow(user); }
+  }
+  logAudit(admin, approve ? "approveChore" : "rejectChore", c.userId, c.taskTitle);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------
+// Admin: perks (Perks + Redemptions)
+// ---------------------------------------------------------------
+function adminListPerks(body) {
+  requireAdmin(body);
+  return { ok: true, perks: readRows(perksSheet(), PERK_HEADERS) };
+}
+
+function adminCreatePerk(body) {
+  const admin = requireAdmin(body);
+  const { title, starCost, assignedTo } = body;
+  if (!title || !starCost) return { ok: false, error: "Missing fields" };
+  appendRowObj(perksSheet(), PERK_HEADERS, {
+    perkId: Utilities.getUuid(), title, starCost: Number(starCost) || 0,
+    assignedTo: assignedTo || "all", active: true, createdDate: nowIso(),
+  });
+  logAudit(admin, "createPerk", "", title);
+  return { ok: true };
+}
+
+function adminUpdatePerk(body) {
+  const admin = requireAdmin(body);
+  const perk = readRows(perksSheet(), PERK_HEADERS).find(p => p.perkId === body.perkId);
+  if (!perk) return { ok: false, error: "Reward not found" };
+  if (body.title !== undefined) perk.title = body.title;
+  if (body.starCost !== undefined) perk.starCost = Number(body.starCost) || 0;
+  if (body.assignedTo !== undefined) perk.assignedTo = body.assignedTo;
+  if (body.active !== undefined) perk.active = body.active;
+  writeRow(perksSheet(), PERK_HEADERS, perk);
+  logAudit(admin, "updatePerk", "", perk.title);
+  return { ok: true };
+}
+
+function adminDeletePerk(body) {
+  const admin = requireAdmin(body);
+  const perk = readRows(perksSheet(), PERK_HEADERS).find(p => p.perkId === body.perkId);
+  if (!perk) return { ok: false, error: "Reward not found" };
+  perksSheet().deleteRow(perk._row);
+  logAudit(admin, "deletePerk", "", perk.title);
+  return { ok: true };
+}
+
+function adminListPendingRedemptions(body) {
+  requireAdmin(body);
+  const users = readRows(usersSheet(), USER_HEADERS);
+  const nameFor = uid => { const u = users.find(x => x.userId === uid); return u ? u.name : uid; };
+  const pending = readRows(redemptionsSheet(), REDEMPTION_HEADERS).filter(r => r.status === "pending");
+  return { ok: true, redemptions: pending.map(r => Object.assign({}, r, { kidName: nameFor(r.userId) })) };
+}
+
+function adminReviewRedemption(body) {
+  const admin = requireAdmin(body);
+  const { redemptionId, approve } = body;
+  const r = readRows(redemptionsSheet(), REDEMPTION_HEADERS).find(x => x.redemptionId === redemptionId);
+  if (!r) return { ok: false, error: "Not found" };
+  r.status = approve ? "fulfilled" : "rejected";
+  r.reviewedDate = nowIso();
+  writeRow(redemptionsSheet(), REDEMPTION_HEADERS, r);
+  if (!approve) {
+    const user = findUser(r.userId);
+    if (user) { user.stars = (Number(user.stars) || 0) + (Number(r.starCost) || 0); writeUserRow(user); }
+  }
+  logAudit(admin, approve ? "fulfillRedemption" : "rejectRedemption", r.userId, r.perkTitle);
   return { ok: true };
 }

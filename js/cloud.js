@@ -65,14 +65,43 @@ const SavvioCloud = (() => {
     changePin: (userId, sessionToken, currentPin, newPin) =>
       call("changePin", { userId, sessionToken, currentPin, newPin }),
 
+    // --- Chores & Perks (kid-facing) ---
+    listTasks: (userId, sessionToken) => call("listTasks", { userId, sessionToken }),
+    completeTask: (userId, sessionToken, taskId) => call("completeTask", { userId, sessionToken, taskId }),
+    listPerks: (userId, sessionToken) => call("listPerks", { userId, sessionToken }),
+    redeemPerk: (userId, sessionToken, perkId) => call("redeemPerk", { userId, sessionToken, perkId }),
+
     // --- Admin ---
     adminLogin: (username, password) => call("adminLogin", { username, password }),
     adminListUsers: (adminSessionToken) => call("adminListUsers", { adminSessionToken }),
     adminApproveUser: (adminSessionToken, userId) => call("adminApproveUser", { adminSessionToken, userId }),
+    adminRejectUser: (adminSessionToken, userId) => call("adminRejectUser", { adminSessionToken, userId }),
     adminLockUser: (adminSessionToken, userId) => call("adminLockUser", { adminSessionToken, userId }),
     adminUnlockUser: (adminSessionToken, userId) => call("adminUnlockUser", { adminSessionToken, userId }),
     adminResetPin: (adminSessionToken, userId, newPin) => call("adminResetPin", { adminSessionToken, userId, newPin }),
     adminDeleteUser: (adminSessionToken, userId) => call("adminDeleteUser", { adminSessionToken, userId }),
+
+    // --- Admin: chores ---
+    adminListTasks: (adminSessionToken) => call("adminListTasks", { adminSessionToken }),
+    adminCreateTask: (adminSessionToken, title, starValue, assignedTo, recurring) =>
+      call("adminCreateTask", { adminSessionToken, title, starValue, assignedTo, recurring }),
+    adminUpdateTask: (adminSessionToken, taskId, patch) =>
+      call("adminUpdateTask", Object.assign({ adminSessionToken, taskId }, patch)),
+    adminDeleteTask: (adminSessionToken, taskId) => call("adminDeleteTask", { adminSessionToken, taskId }),
+    adminListPendingCompletions: (adminSessionToken) => call("adminListPendingCompletions", { adminSessionToken }),
+    adminReviewCompletion: (adminSessionToken, completionId, approve) =>
+      call("adminReviewCompletion", { adminSessionToken, completionId, approve }),
+
+    // --- Admin: perks ---
+    adminListPerks: (adminSessionToken) => call("adminListPerks", { adminSessionToken }),
+    adminCreatePerk: (adminSessionToken, title, starCost, assignedTo) =>
+      call("adminCreatePerk", { adminSessionToken, title, starCost, assignedTo }),
+    adminUpdatePerk: (adminSessionToken, perkId, patch) =>
+      call("adminUpdatePerk", Object.assign({ adminSessionToken, perkId }, patch)),
+    adminDeletePerk: (adminSessionToken, perkId) => call("adminDeletePerk", { adminSessionToken, perkId }),
+    adminListPendingRedemptions: (adminSessionToken) => call("adminListPendingRedemptions", { adminSessionToken }),
+    adminReviewRedemption: (adminSessionToken, redemptionId, approve) =>
+      call("adminReviewRedemption", { adminSessionToken, redemptionId, approve }),
   };
 })();
 

@@ -38,6 +38,18 @@ Two ways to change it:
   visible in the repo. They're only read once (when `Admins` is empty), so
   you can delete them again afterwards.
 
+### Optional: get an email when someone signs up
+
+Add one more Script Property:
+
+- `ADMIN_NOTIFY_EMAIL` → the email address you want notified
+
+Whenever a new profile registers, you'll get a short email ("X just created
+a Savvio profile and is waiting for approval"). Leave this property unset
+if you'd rather just check the Admin portal's Overview tab, which shows
+pending sign-ups too. This uses `MailApp.sendEmail`, which is included in
+Apps Script's default authorization — no extra scopes or setup needed.
+
 ## 3. Deploy as a web app
 
 1. In the Apps Script editor: Deploy → New deployment.
@@ -63,21 +75,38 @@ and redeploy to GitHub Pages as usual.
   registers in the background as `pending`.
 - Open `admin/admin.html`, log in with the admin username/password from
   step 2, and you'll see that profile waiting for approval.
-- Approve it. From here: lock, unlock, reset PIN, and approve all work from
-  the Admin tab, and everything is written to the `AuditLog` sheet.
+- Approve it. From here: lock, unlock, reject, reset PIN, and approve all
+  work from the Admin tab, and everything is written to the `AuditLog`
+  sheet.
 - On a second device, open the app and tap "Log in or create profile" again
   — same name and PIN logs straight in and pulls down their goals, budget,
   lessons, and quiz history.
+- In the Admin portal's **Chores** tab, add a chore (e.g. "Make your bed",
+  5 stars, daily) assigned to that kid or to "All kids". In the app, they'll
+  see it under Rewards → View Chores, tap "Mark done", and it'll show up in
+  your Chores tab as pending — approve it and the stars land in their
+  account automatically.
+- In the **Rewards** admin tab (perks), add something they can spend stars
+  on. They'll see it under Rewards → Redeem Rewards once they have enough
+  stars; redeeming creates a pending request you fulfil (or reject, which
+  refunds the stars) from that same tab.
 
 ## Notes
 
-- Every sheet (`Users`, `Admins`, `AuditLog`) is created automatically the
-  first time the script runs — you don't need to create tabs by hand.
+- Every sheet (`Users`, `Admins`, `AuditLog`, `Tasks`, `Completions`,
+  `Perks`, `Redemptions`) is created automatically the first time the
+  script runs — you don't need to create tabs by hand.
 - PINs and the admin password are never stored in plain text — Code.gs
   salts and SHA-256-hashes them before they touch the sheet.
 - If `PROXY_URL` is left blank in `cloud.js`, the whole app still works —
-  it just stays local-only on that device, same as before.
+  it just stays local-only on that device, same as before. Chores and
+  Rewards specifically need the cloud connected (they only make sense with
+  a parent verifying them), and show a friendly message until then.
 - A profile locked from the Admin portal is enforced the next time that
   device is online (login or app-open triggers a status check). Savvio is a
   family tool, not a bank — this is "good enough" household-level security,
   not something to rely on for anything sensitive.
+- Chores are parent-verified by design: marking a chore done never credits
+  stars by itself — an admin approving it does. Redeeming a reward deducts
+  stars immediately (so a kid can't request the same reward twice with
+  money they don't have) and refunds automatically if you reject it.

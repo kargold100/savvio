@@ -73,6 +73,8 @@ const state = {
   quizSession: null,
   lastNewBadges: [],
   plannerDraft: null,
+  choresData: null,
+  perksData: null,
 };
 
 const $app = () => document.getElementById("app");
@@ -149,12 +151,12 @@ function newProfile({ name, ageGroup, avatar, pin }) {
   return {
     id: uid("kid"),
     name, ageGroup, avatar, pin,
-    xp: 0, streak: 0, lastActiveDate: null,
+    xp: 0, streak: 0, stars: 0, lastActiveDate: null,
     createdDate: todayStr(),
     goals: [], budget: [], lessonsCompleted: [], quizAttempts: [],
     budgetPlan: null, // { income, save, spend, give }
     // Cloud sync fields (all local-only and harmless until js/cloud.js has a PROXY_URL)
-    cloudStatus: "offline", // offline | pending | active | locked
+    cloudStatus: "offline", // offline | pending | active | rejected | locked
     sessionToken: null, sessionExpiry: null,
     locked: false,
   };
@@ -180,6 +182,7 @@ function scheduleCloudSync() {
     const res = await SavvioCloud.syncProfile(p.id, p.sessionToken, p.xp, p.streak, p.lastActiveDate, payload);
     if (res && res.ok) {
       p.cloudStatus = res.status;
+      p.stars = res.stars || 0;
     } else if (res && res.locked) {
       lockProfileLocally();
     }
@@ -249,7 +252,7 @@ function go(screen, params = {}) {
 
 function render() {
   const authScreens = ["splash","login-entry","onboard-age","onboard-avatar","pin-login"];
-  if (state.screen !== "locked" && !authScreens.includes(state.screen) && !state.profile) { state.screen = "splash"; }
+  if (state.screen !== "locked" && state.screen !== "rejected" && !authScreens.includes(state.screen) && !state.profile) { state.screen = "splash"; }
 
   let html = "";
   switch (state.screen) {
@@ -270,6 +273,9 @@ function render() {
     case "rewards": html = renderRewards(); break;
     case "profile": html = renderProfile(); break;
     case "locked": html = renderLocked(); break;
+    case "rejected": html = renderRejected(); break;
+    case "chores": html = renderChores(); break;
+    case "perks": html = renderPerks(); break;
     default: html = renderSplash();
   }
   $app().innerHTML = html;
@@ -444,9 +450,10 @@ async function completeCloudLogin(res, pin) {
   let saved = {};
   if (dataRes && dataRes.ok) { try { saved = JSON.parse(dataRes.dataJson || "{}"); } catch (e) { saved = {}; } }
   const existing = SavvioStorage.getProfile(userId);
+  const previousStatus = existing ? existing.cloudStatus : null;
   const profile = {
     id: userId, name: res.profile.name, ageGroup: res.profile.ageGroup, avatar: res.profile.avatar, pin,
-    xp: res.profile.xp || 0, streak: res.profile.streak || 0, lastActiveDate: res.profile.lastActiveDate || null,
+    xp: res.profile.xp || 0, streak: res.profile.streak || 0, stars: res.profile.stars || 0, lastActiveDate: res.profile.lastActiveDate || null,
     createdDate: res.profile.createdDate || todayStr(),
     goals: saved.goals || (existing && existing.goals) || [],
     budget: saved.budget || (existing && existing.budget) || [],
@@ -462,7 +469,9 @@ async function completeCloudLogin(res, pin) {
   state.loginEntry = { name: "", pin: "" };
   closeModal();
   touchDailyStreak();
+  if (profile.cloudStatus === "rejected") { go("rejected"); return; }
   toast(`Welcome back, ${profile.name}! 🌱`);
+  if (previousStatus === "pending" && profile.cloudStatus === "active") toast("🎉 Your profile has been approved!");
   go("dashboard");
 }
 
@@ -576,6 +585,18 @@ function renderLocked() {
       </div>
       <button class="btn btn-outline btn-block" style="max-width:340px;margin-top:14px;" id="locked-retry-btn">Try again</button>
       <button class="btn btn-outline btn-block" style="max-width:340px;margin-top:8px;" id="locked-switch-btn">Switch profile</button>
+    </div>
+  `;
+}
+
+function renderRejected() {
+  const name = state.profile ? escapeHtml(state.profile.name) : "";
+  return `
+    <div class="splash locked-screen">
+      <div class="lock-icon">🌱</div>
+      <h1>Not approved yet, ${name}</h1>
+      <p>A parent or guardian looked at this profile and didn't approve it. If that seems wrong, have a chat with them or check the Savvio Admin portal.</p>
+      <button class="btn btn-outline btn-block" style="max-width:340px;margin-top:14px;" id="rejected-switch-btn">Switch profile</button>
     </div>
   `;
 }
@@ -1080,6 +1101,15 @@ function renderRewards() {
       <div style="font-family:var(--font-display);font-size:1.1rem;">Level ${getLevelInfo(p.xp).level} · ${getLevelInfo(p.xp).name}</div>
       <div style="color:var(--ink-faint);font-size:.85rem;">${p.xp} XP total</div>
     </div>
+
+    <div class="card" style="text-align:center;background:linear-gradient(160deg, #FFF6DC, var(--surface));">
+      <div style="font-size:2.2rem;">⭐ ${p.stars || 0}</div>
+      <div style="color:var(--ink-faint);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;">Stars from chores</div>
+      <p style="font-size:.85rem;color:var(--ink-soft);margin:8px 0 14px;">Do chores at home, earn stars once a parent checks them off, then spend stars on rewards they've set up.</p>
+      <button class="btn btn-primary btn-block" id="open-chores-btn">🌟 View Chores</button>
+      <button class="btn btn-outline btn-block" id="open-perks-btn" style="margin-top:10px;">🎁 Redeem Rewards</button>
+    </div>
+
     <div class="section-head"><h2>Badges</h2></div>
     <div class="badge-grid">
       ${BADGES.map(b => {
@@ -1088,6 +1118,164 @@ function renderRewards() {
       }).join("")}
     </div>
   `, "rewards");
+}
+
+// ---------------------------------------------------------------
+// Chores (stars) & Perks (rewards) — parent-verified via the cloud
+// ---------------------------------------------------------------
+function renderChores() {
+  if (!SavvioCloud.isConfigured()) {
+    return shell(`
+      <div class="section-head" style="margin-top:0;"><h2>Chores</h2></div>
+      <div class="card empty-state"><span class="emoji">🌟</span>Chores need the cloud backend connected first. Ask a parent to finish the setup in <code>appsscript/SETUP.md</code>.</div>
+      <button class="btn btn-outline btn-block" data-nav="rewards">← Back to Rewards</button>
+    `, "rewards");
+  }
+  if (!state.choresData) {
+    loadChores();
+    return shell(`<div class="section-head" style="margin-top:0;"><h2>Chores</h2></div><div class="card" style="text-align:center;">Loading your chores…</div>`, "rewards");
+  }
+  const { tasks, history, error } = state.choresData;
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Chores</h2></div>
+    <div class="card" style="text-align:center;"><div style="font-size:1.6rem;">⭐ ${state.profile.stars || 0}</div><div style="color:var(--ink-faint);font-size:.72rem;text-transform:uppercase;">Your stars</div></div>
+    ${error ? `<div class="card empty-state">${escapeHtml(error)}</div>` : ""}
+    ${tasks && tasks.length ? tasks.map(taskRowHtml).join("") : `<div class="card empty-state"><span class="emoji">🌟</span>No chores set up yet. Ask a parent to add some in the Admin portal.</div>`}
+    ${history && history.length ? `<div class="section-head"><h2>Recent</h2></div>${history.slice(0,6).map(choreHistoryRowHtml).join("")}` : ""}
+    <button class="btn btn-outline btn-block" data-nav="rewards" style="margin-top:10px;">← Back to Rewards</button>
+  `, "rewards");
+}
+
+function taskRowHtml(t) {
+  const label = t.recurring === "daily" ? "Daily" : t.recurring === "weekly" ? "Weekly" : "One-time";
+  let action;
+  if (t.status === "approved") action = `<span class="badge-pill">Done ✅</span>`;
+  else if (t.status === "pending") action = `<span class="badge-pill grey">Waiting for approval</span>`;
+  else action = `<button class="btn btn-primary btn-sm" data-task-done="${t.taskId}">Mark done</button>`;
+  return `
+    <div class="card-flat" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <div><div style="font-weight:700;">${escapeHtml(t.title)}</div><div style="font-size:.72rem;color:var(--ink-faint);">${label} · ⭐ ${t.starValue}</div></div>
+      ${action}
+    </div>`;
+}
+
+function choreHistoryRowHtml(h) {
+  const icon = h.status === "approved" ? "✅" : h.status === "rejected" ? "❌" : "⏳";
+  return `<div class="card-flat" style="display:flex;justify-content:space-between;"><span>${icon} ${escapeHtml(h.taskTitle)}</span><span style="color:var(--ink-faint);font-size:.78rem;">${h.status}</span></div>`;
+}
+
+function renderPerks() {
+  if (!SavvioCloud.isConfigured()) {
+    return shell(`
+      <div class="section-head" style="margin-top:0;"><h2>Redeem Rewards</h2></div>
+      <div class="card empty-state"><span class="emoji">🎁</span>Rewards need the cloud backend connected first. Ask a parent to finish the setup in <code>appsscript/SETUP.md</code>.</div>
+      <button class="btn btn-outline btn-block" data-nav="rewards">← Back to Rewards</button>
+    `, "rewards");
+  }
+  if (!state.perksData) {
+    loadPerks();
+    return shell(`<div class="section-head" style="margin-top:0;"><h2>Redeem Rewards</h2></div><div class="card" style="text-align:center;">Loading rewards…</div>`, "rewards");
+  }
+  const { perks, history, error } = state.perksData;
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Redeem Rewards</h2></div>
+    <div class="card" style="text-align:center;"><div style="font-size:1.6rem;">⭐ ${state.profile.stars || 0}</div><div style="color:var(--ink-faint);font-size:.72rem;text-transform:uppercase;">Your stars</div></div>
+    ${error ? `<div class="card empty-state">${escapeHtml(error)}</div>` : ""}
+    ${perks && perks.length ? perks.map(perkRowHtml).join("") : `<div class="card empty-state"><span class="emoji">🎁</span>No rewards set up yet. Ask a parent to add some in the Admin portal.</div>`}
+    ${history && history.length ? `<div class="section-head"><h2>Recent</h2></div>${history.slice(0,6).map(perkHistoryRowHtml).join("")}` : ""}
+    <button class="btn btn-outline btn-block" data-nav="rewards" style="margin-top:10px;">← Back to Rewards</button>
+  `, "rewards");
+}
+
+function perkRowHtml(p) {
+  const stars = state.profile.stars || 0;
+  let action;
+  if (p.pending) action = `<span class="badge-pill grey">Requested</span>`;
+  else if (stars < p.starCost) action = `<span class="badge-pill grey">Need ${p.starCost - stars} more</span>`;
+  else action = `<button class="btn btn-primary btn-sm" data-perk-redeem="${p.perkId}">Redeem</button>`;
+  return `
+    <div class="card-flat" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <div><div style="font-weight:700;">${escapeHtml(p.title)}</div><div style="font-size:.72rem;color:var(--ink-faint);">⭐ ${p.starCost}</div></div>
+      ${action}
+    </div>`;
+}
+
+function perkHistoryRowHtml(h) {
+  const icon = h.status === "fulfilled" ? "🎉" : h.status === "rejected" ? "↩️" : "⏳";
+  return `<div class="card-flat" style="display:flex;justify-content:space-between;"><span>${icon} ${escapeHtml(h.perkTitle)}</span><span style="color:var(--ink-faint);font-size:.78rem;">${h.status}</span></div>`;
+}
+
+function diffChoreNotifications(prevData, newData) {
+  if (!prevData) return; // first load this session — nothing to compare against yet
+  const prevMap = {};
+  (prevData.history || []).forEach(h => { prevMap[h.completionId] = h.status; });
+  (newData.history || []).forEach(h => {
+    const old = prevMap[h.completionId];
+    if (old === "pending" && h.status === "approved") toast(`🎉 Chore approved: ${h.taskTitle} (+${h.starValue}⭐)`);
+    else if (old === "pending" && h.status === "rejected") toast(`Chore not approved this time: ${h.taskTitle}`);
+  });
+}
+
+function diffPerkNotifications(prevData, newData) {
+  if (!prevData) return;
+  const prevMap = {};
+  (prevData.history || []).forEach(h => { prevMap[h.redemptionId] = h.status; });
+  (newData.history || []).forEach(h => {
+    const old = prevMap[h.redemptionId];
+    if (old === "pending" && h.status === "fulfilled") toast(`🎁 Reward ready: ${h.perkTitle}!`);
+    else if (old === "pending" && h.status === "rejected") toast(`Reward request declined: ${h.perkTitle} (stars refunded)`);
+  });
+}
+
+async function loadChores() {
+  const p = state.profile;
+  if (!p.sessionToken) { state.choresData = { tasks: [], history: [], error: "Log in once while online to unlock chores." }; render(); return; }
+  const res = await SavvioCloud.listTasks(p.id, p.sessionToken);
+  if (res && res.ok) {
+    diffChoreNotifications(state.choresData, res);
+    state.choresData = res;
+    p.stars = res.stars || 0;
+    SavvioStorage.saveProfile(p);
+  } else {
+    state.choresData = { tasks: [], history: [], error: (res && res.error) || "Couldn't load chores right now." };
+  }
+  render();
+}
+
+async function markTaskDone(taskId) {
+  const p = state.profile;
+  const res = await SavvioCloud.completeTask(p.id, p.sessionToken, taskId);
+  if (res && res.ok) { toast("Submitted! Waiting for a parent to approve. 🌟"); state.choresData = null; go("chores"); }
+  else toast((res && res.error) || "Couldn't submit that chore");
+}
+
+async function loadPerks() {
+  const p = state.profile;
+  if (!p.sessionToken) { state.perksData = { perks: [], history: [], error: "Log in once while online to unlock rewards." }; render(); return; }
+  const res = await SavvioCloud.listPerks(p.id, p.sessionToken);
+  if (res && res.ok) {
+    diffPerkNotifications(state.perksData, res);
+    state.perksData = res;
+    p.stars = res.stars || 0;
+    SavvioStorage.saveProfile(p);
+  } else {
+    state.perksData = { perks: [], history: [], error: (res && res.error) || "Couldn't load rewards right now." };
+  }
+  render();
+}
+
+async function redeemPerkFlow(perkId) {
+  const p = state.profile;
+  const res = await SavvioCloud.redeemPerk(p.id, p.sessionToken, perkId);
+  if (res && res.ok) {
+    p.stars = res.stars || 0;
+    SavvioStorage.saveProfile(p);
+    toast("Requested! Waiting for a parent to hand it over. 🎁");
+    state.perksData = null;
+    go("perks");
+  } else {
+    toast((res && res.error) || "Couldn't redeem that reward");
+  }
 }
 
 // ---------------------------------------------------------------
@@ -1253,8 +1441,16 @@ function bindScreenEvents() {
   };
   const lockedSwitchBtn = document.getElementById("locked-switch-btn");
   if (lockedSwitchBtn) lockedSwitchBtn.onclick = () => { state.profile = null; go("splash"); };
+  const rejectedSwitchBtn = document.getElementById("rejected-switch-btn");
+  if (rejectedSwitchBtn) rejectedSwitchBtn.onclick = () => { state.profile = null; go("splash"); };
 
   // Rewards / profile
+  const openChoresBtn = document.getElementById("open-chores-btn");
+  if (openChoresBtn) openChoresBtn.onclick = () => { state.choresData = null; go("chores"); };
+  const openPerksBtn = document.getElementById("open-perks-btn");
+  if (openPerksBtn) openPerksBtn.onclick = () => { state.perksData = null; go("perks"); };
+  document.querySelectorAll("[data-task-done]").forEach(el => el.onclick = () => markTaskDone(el.dataset.taskDone));
+  document.querySelectorAll("[data-perk-redeem]").forEach(el => el.onclick = () => redeemPerkFlow(el.dataset.perkRedeem));
   const editProfileBtn = document.getElementById("edit-profile-btn");
   if (editProfileBtn) editProfileBtn.onclick = () => editProfileModal();
   const changePinBtn = document.getElementById("change-pin-btn");
@@ -1268,9 +1464,9 @@ function bindScreenEvents() {
     render();
   });
   const switchBtn = document.getElementById("switch-profile-btn");
-  if (switchBtn) switchBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; go("splash"); };
+  if (switchBtn) switchBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; state.choresData = null; state.perksData = null; go("splash"); };
   const logoutBtn = document.getElementById("logout-btn");
-  if (logoutBtn) logoutBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; go("splash"); };
+  if (logoutBtn) logoutBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; state.choresData = null; state.perksData = null; go("splash"); };
 }
 
 async function unlockProfile(profileId, pin) {
@@ -1284,15 +1480,19 @@ async function unlockProfile(profileId, pin) {
     if (res && res.ok) {
       // Cloud confirms this PIN — also keep the local copy in sync (covers
       // the case where an admin reset the PIN from the Admin portal).
+      const previousStatus = p.cloudStatus;
       p.pin = pin;
       p.sessionToken = res.sessionToken;
       p.cloudStatus = res.profile.status;
+      p.stars = res.profile.stars || 0;
       p.locked = false;
       state.profile = p;
       SavvioStorage.saveProfile(p);
       SavvioStorage.setActiveProfileId(p.id);
       state.pinBuffer = "";
       touchDailyStreak();
+      if (p.cloudStatus === "rejected") { go("rejected"); return; }
+      if (previousStatus === "pending" && p.cloudStatus === "active") toast("🎉 Your profile has been approved!");
       go("dashboard");
       return;
     }
@@ -1383,18 +1583,25 @@ function init() {
       touchDailyStreak();
       if (p.locked) { go("locked"); }
       else { go("dashboard"); }
-      // Best-effort background check: catches a lock/unlock that happened
-      // on the Admin portal since this device was last online.
+      // Best-effort background check: catches a lock/unlock/approval that
+      // happened on the Admin portal since this device was last online.
       if (SavvioCloud.isConfigured()) {
+        const previousStatus = p.cloudStatus;
         SavvioCloud.checkStatus(p.id).then(res => {
-          if (res && res.ok) {
-            if (res.status === "locked") lockProfileLocally();
-            else if (state.profile && state.profile.id === p.id) {
-              state.profile.cloudStatus = res.status;
-              state.profile.locked = false;
+          if (res && res.ok && state.profile && state.profile.id === p.id) {
+            state.profile.stars = res.stars || 0;
+            if (res.status === "locked") { lockProfileLocally(); return; }
+            if (res.status === "rejected") {
+              state.profile.cloudStatus = "rejected";
               SavvioStorage.saveProfile(state.profile);
-              if (state.screen === "locked") go("dashboard");
+              go("rejected");
+              return;
             }
+            state.profile.cloudStatus = res.status;
+            state.profile.locked = false;
+            SavvioStorage.saveProfile(state.profile);
+            if (state.screen === "locked") go("dashboard");
+            if (previousStatus === "pending" && res.status === "active") toast("🎉 Your profile has been approved!");
           }
         });
       }

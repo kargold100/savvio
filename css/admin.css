@@ -1,0 +1,67 @@
+/* ===========================================================
+   Savvio Admin — layout styles
+   Shares design tokens with css/style.css (loaded first)
+   =========================================================== */
+
+body.admin-body{
+  background: var(--bg);
+  background-image:
+    radial-gradient(circle at 6% 0%, var(--primary-tint) 0%, transparent 35%),
+    radial-gradient(circle at 100% 0%, var(--sky-tint) 0%, transparent 30%);
+}
+
+.admin-shell{ max-width: 1080px; margin: 0 auto; padding: 22px 20px 60px; }
+
+.admin-topbar{
+  display:flex; align-items:center; justify-content:space-between; margin-bottom: 20px;
+}
+.admin-topbar .brand{ display:flex; align-items:center; gap:10px; font-family: var(--font-display); font-weight:700; font-size:1.3rem; color: var(--primary-dark); }
+
+.admin-login-wrap{
+  max-width: 380px; margin: 8vh auto; text-align:center; padding: 10px 6px;
+}
+.admin-login-wrap .card{ text-align:left; }
+
+.admin-tabs{ display:flex; gap:8px; margin-bottom: 18px; flex-wrap:wrap; }
+.admin-tabs button{
+  padding: 10px 18px; border-radius: var(--radius-pill); border:2px solid var(--border);
+  background: var(--surface); font-weight:700; font-size:.85rem; color: var(--ink-soft);
+}
+.admin-tabs button.active{ background: var(--primary); border-color: var(--primary); color:#fff; }
+
+.stat-grid{ display:grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap:12px; margin-bottom: 18px; }
+.stat-grid .card{ text-align:center; margin-bottom:0; }
+.stat-grid .val{ font-family: var(--font-display); font-size:1.6rem; color: var(--primary-dark); }
+.stat-grid .lbl{ font-size:.72rem; color: var(--ink-faint); text-transform:uppercase; letter-spacing:.04em; }
+
+.toolbar{ display:flex; gap:10px; margin-bottom: 14px; flex-wrap:wrap; align-items:center; }
+.toolbar input[type=text]{ flex: 1 1 220px; }
+.filter-chip{
+  padding: 8px 14px; border-radius: var(--radius-pill); border:2px solid var(--border);
+  background: var(--surface); font-size:.78rem; font-weight:700; color: var(--ink-soft);
+}
+.filter-chip.active{ border-color: var(--primary); background: var(--primary-tint); color: var(--primary-dark); }
+
+.user-table{ width:100%; border-collapse: collapse; background: var(--surface); border-radius: var(--radius-lg); overflow:hidden; box-shadow: 0 6px 20px var(--shadow-soft); }
+.user-table th{ text-align:left; font-size:.68rem; text-transform:uppercase; letter-spacing:.04em; color: var(--ink-faint); padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.user-table td{ padding: 12px 14px; border-bottom: 1px solid var(--border); font-size:.88rem; vertical-align:middle; }
+.user-table tr:last-child td{ border-bottom:none; }
+.user-table .who{ display:flex; align-items:center; gap:10px; }
+.user-table .who .av{ width:34px; height:34px; border-radius:50%; background: var(--primary-tint); display:flex; align-items:center; justify-content:center; }
+.user-table .actions{ display:flex; gap:6px; flex-wrap:wrap; }
+.user-table .actions button{ padding: 6px 10px; font-size:.72rem; border-radius: var(--radius-pill); border:1px solid var(--border); background: var(--surface-2); font-weight:700; }
+.user-table .actions button.danger{ color: var(--danger); border-color: #F6C6C6; }
+.user-table .actions button.warn{ color: #8A5A00; border-color: #F3D9A6; }
+.user-table .actions button.good{ color: var(--primary-dark); border-color: var(--border); }
+
+.empty-row td{ text-align:center; color: var(--ink-faint); padding: 30px 14px; }
+
+.audit-list .card-flat{ display:flex; justify-content:space-between; gap:12px; font-size:.82rem; }
+.audit-list .t{ color: var(--ink-faint); font-size:.72rem; white-space:nowrap; }
+
+@media (max-width: 720px){
+  .user-table thead{ display:none; }
+  .user-table, .user-table tbody, .user-table tr, .user-table td{ display:block; width:100%; }
+  .user-table tr{ padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .user-table td{ border:none; padding: 4px 0; }
+}

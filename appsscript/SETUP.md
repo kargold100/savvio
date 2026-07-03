@@ -14,16 +14,29 @@ to turn cloud sync on.
    `appsscript/Code.gs` from this project.
 4. Save (Ctrl/Cmd+S). Name the project "Savvio Backend".
 
-## 2. Set your first admin login (one time only)
+## 2. Your first admin login
 
-1. In the Apps Script editor: Project Settings (gear icon) → Script Properties.
-2. Add two properties:
-   - `ADMIN_BOOTSTRAP_USERNAME` → e.g. `kavya`
-   - `ADMIN_BOOTSTRAP_PASSWORD` → a strong password only you know
-3. These are only ever read once, the first time the `Admins` sheet is empty,
-   to create your admin account (stored as a salted hash, never as plain
-   text). You can delete both properties again afterwards if you like —
-   they're not needed after that first run.
+Code.gs ships with a default admin login that's created automatically the
+first time the `Admins` sheet is empty:
+
+- Username: `sav_admin`
+- Password: `SavAdmin123$`
+
+**If you're pushing this repo to public GitHub, change this before you rely
+on it** — anyone can read `Code.gs` in a public repo, defaults included.
+Two ways to change it:
+
+- **Easiest:** log into `admin/admin.html` with the defaults once it's
+  deployed, then reset your own password — (there's no in-UI password
+  change yet; for now, edit `DEFAULT_ADMIN_USERNAME` / `DEFAULT_ADMIN_PASSWORD`
+  in `Code.gs` before first deploy, or use Script Properties below).
+- **More private:** before first deploy, in the Apps Script editor go to
+  Project Settings (gear icon) → Script Properties, and add:
+  - `ADMIN_BOOTSTRAP_USERNAME` → your own username
+  - `ADMIN_BOOTSTRAP_PASSWORD` → your own password
+  Script Properties always win over the defaults in the code, and aren't
+  visible in the repo. They're only read once (when `Admins` is empty), so
+  you can delete them again afterwards.
 
 ## 3. Deploy as a web app
 
@@ -45,12 +58,16 @@ and redeploy to GitHub Pages as usual.
 
 ## 5. Try it
 
-- Open the app, create a profile — it registers in the background as
-  `pending`.
-- Open `admin/admin.html`, log in with the username/password from step 2,
-  and you'll see that profile waiting for approval.
+- Open the app, create a profile (tap "Log in or create profile", enter a
+  name + PIN it doesn't recognise, confirm you want to create one) — it
+  registers in the background as `pending`.
+- Open `admin/admin.html`, log in with the admin username/password from
+  step 2, and you'll see that profile waiting for approval.
 - Approve it. From here: lock, unlock, reset PIN, and approve all work from
   the Admin tab, and everything is written to the `AuditLog` sheet.
+- On a second device, open the app and tap "Log in or create profile" again
+  — same name and PIN logs straight in and pulls down their goals, budget,
+  lessons, and quiz history.
 
 ## Notes
 

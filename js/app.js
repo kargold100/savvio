@@ -65,12 +65,14 @@ const state = {
   pinBuffer: "",
   pinTargetId: null, // profile being unlocked
   onboard: { name:"", ageGroup:"", avatar:"", pin:"" },
+  loginEntry: { name:"", pin:"" },
   budgetTab: "all", // all | income | expense
   budgetRange: "week", // week | month
   budgetForm: { type:"income", category:"allowance" },
   quizFilter: "all",
   quizSession: null,
   lastNewBadges: [],
+  plannerDraft: null,
 };
 
 const $app = () => document.getElementById("app");
@@ -150,6 +152,7 @@ function newProfile({ name, ageGroup, avatar, pin }) {
     xp: 0, streak: 0, lastActiveDate: null,
     createdDate: todayStr(),
     goals: [], budget: [], lessonsCompleted: [], quizAttempts: [],
+    budgetPlan: null, // { income, save, spend, give }
     // Cloud sync fields (all local-only and harmless until js/cloud.js has a PROXY_URL)
     cloudStatus: "offline", // offline | pending | active | locked
     sessionToken: null, sessionExpiry: null,
@@ -172,7 +175,7 @@ function scheduleCloudSync() {
     const payload = {
       goals: p.goals, budget: p.budget,
       lessonsCompleted: p.lessonsCompleted, quizAttempts: p.quizAttempts,
-      badgesEarned: p.badgesEarned || [],
+      badgesEarned: p.badgesEarned || [], budgetPlan: p.budgetPlan || null,
     };
     const res = await SavvioCloud.syncProfile(p.id, p.sessionToken, p.xp, p.streak, p.lastActiveDate, payload);
     if (res && res.ok) {
@@ -245,20 +248,20 @@ function go(screen, params = {}) {
 }
 
 function render() {
-  const authScreens = ["splash","onboard-name","onboard-age","onboard-avatar","onboard-pin","pin-login"];
+  const authScreens = ["splash","login-entry","onboard-age","onboard-avatar","pin-login"];
   if (state.screen !== "locked" && !authScreens.includes(state.screen) && !state.profile) { state.screen = "splash"; }
 
   let html = "";
   switch (state.screen) {
     case "splash": html = renderSplash(); break;
-    case "onboard-name": html = renderOnboardName(); break;
+    case "login-entry": html = renderLoginEntry(); break;
     case "onboard-age": html = renderOnboardAge(); break;
     case "onboard-avatar": html = renderOnboardAvatar(); break;
-    case "onboard-pin": html = renderOnboardPin(); break;
     case "pin-login": html = renderPinLogin(); break;
     case "dashboard": html = renderDashboard(); break;
     case "goals": html = renderGoals(); break;
     case "budget": html = renderBudget(); break;
+    case "planner": html = renderPlanner(); break;
     case "lessons": html = renderLessons(); break;
     case "lesson-detail": html = renderLessonDetail(); break;
     case "quiz": html = renderQuizHub(); break;
@@ -321,23 +324,30 @@ function renderSplash() {
             </div>`).join("")}
         </div>
       ` : ""}
-      <button class="btn btn-primary btn-block" data-nav="onboard-name" style="max-width:340px;margin-top:14px;">+ New Profile</button>
-      ${SavvioCloud.isConfigured() ? `<button class="btn btn-outline btn-block" id="restore-profile-btn" style="max-width:340px;margin-top:10px;">Restore profile on this device</button>` : ""}
+      <button class="btn btn-primary btn-block" data-nav="login-entry" style="max-width:340px;margin-top:14px;">Log in or create profile</button>
     </div>
   `;
 }
 
-function renderOnboardName() {
+// One combined screen: enter name + PIN. If it matches an existing profile
+// (checked in the cloud first, then locally if offline), it logs straight
+// in. If nothing matches, it offers to create a new profile using the same
+// name + PIN, so nothing has to be typed twice.
+function renderLoginEntry() {
   return `
     <div class="splash">
       <div style="font-size:3rem;">👋</div>
-      <h1>What's your name?</h1>
-      <p>Let's set up your Savvio profile.</p>
+      <h1>Log in to Savvio</h1>
+      <p>Enter your name and PIN. New here? We'll help you set up a profile.</p>
       <div style="width:100%;max-width:320px;text-align:left;">
-        <label for="ob-name">Your name</label>
-        <input type="text" id="ob-name" placeholder="e.g. Alex" value="${escapeHtml(state.onboard.name)}" maxlength="20" />
+        <label for="li-name">Your name</label>
+        <input type="text" id="li-name" placeholder="e.g. Alex" maxlength="20" value="${escapeHtml(state.loginEntry.name)}" />
+        <label for="li-pin">PIN</label>
+        <input type="text" id="li-pin" inputmode="numeric" maxlength="4" placeholder="4-digit PIN" value="${escapeHtml(state.loginEntry.pin)}" />
       </div>
-      <button class="btn btn-primary btn-block" id="ob-name-next" style="max-width:320px;margin-top:16px;">Continue</button>
+      <button class="btn btn-primary btn-block" id="li-submit" style="max-width:320px;margin-top:16px;">Continue</button>
+      <button class="btn btn-outline btn-block btn-sm" data-nav="splash" style="max-width:320px;margin-top:10px;">← Back</button>
+      <p id="li-error" style="color:var(--danger);font-size:.82rem;min-height:1.2em;"></p>
     </div>
   `;
 }
@@ -346,7 +356,7 @@ function renderOnboardAge() {
   return `
     <div class="splash">
       <div style="font-size:3rem;">🎂</div>
-      <h1>How old are you?</h1>
+      <h1>How old are you, ${escapeHtml(state.onboard.name)}?</h1>
       <p>This helps Savvio tailor lessons to you.</p>
       <div class="age-toggle" style="width:100%;max-width:320px;">
         <button data-age="kids" class="${state.onboard.ageGroup==='kids'?'selected':''}">🧒<br>8–12</button>
@@ -366,20 +376,7 @@ function renderOnboardAvatar() {
       <div class="avatar-grid" style="width:100%;max-width:320px;">
         ${AVATARS.map(a => `<button class="avatar-choice ${state.onboard.avatar===a?'selected':''}" data-avatar="${a}">${a}</button>`).join("")}
       </div>
-      <button class="btn btn-primary btn-block" id="ob-avatar-next" style="max-width:320px;margin-top:10px;" ${state.onboard.avatar?"":"disabled"}>Continue</button>
-    </div>
-  `;
-}
-
-function renderOnboardPin() {
-  const dots = [0,1,2,3].map(i => `<span class="${state.pinBuffer.length>i?'filled':''}"></span>`).join("");
-  return `
-    <div class="splash">
-      <div style="font-size:3rem;">🔒</div>
-      <h1>Set a 4-digit PIN</h1>
-      <p>This keeps your profile just yours.</p>
-      <div class="pin-dots">${dots}</div>
-      ${pinPad()}
+      <button class="btn btn-primary btn-block" id="ob-avatar-next" style="max-width:320px;margin-top:10px;" ${state.onboard.avatar?"":"disabled"}>Create my profile</button>
     </div>
   `;
 }
@@ -399,43 +396,167 @@ function renderPinLogin() {
   `;
 }
 
-function restoreProfileModal() {
+// ---------------------------------------------------------------
+// Unified login-or-create flow
+// ---------------------------------------------------------------
+async function submitLoginEntry() {
+  const name = document.getElementById("li-name").value.trim();
+  const pin = document.getElementById("li-pin").value.trim();
+  const errEl = document.getElementById("li-error");
+  errEl.textContent = "";
+  if (!name || !/^\d{4}$/.test(pin)) { errEl.textContent = "Enter your name and a 4-digit PIN"; return; }
+  state.loginEntry = { name, pin };
+
+  if (SavvioCloud.isConfigured()) {
+    const res = await SavvioCloud.loginByName(name, pin);
+    if (res && res.ok) { await completeCloudLogin(res, pin); return; }
+    if (res && res.locked) { errEl.textContent = "This profile is locked. Ask a parent to unlock it in the Admin portal."; return; }
+    if (res && res.notFound) { offerCreateProfile(name, pin); return; }
+    if (res && !res.offline) { errEl.textContent = res.error || "Incorrect PIN"; return; }
+    // offline: fall through to local-only check below
+  }
+
+  const local = SavvioStorage.listProfiles().find(x => x.name.trim().toLowerCase() === name.toLowerCase());
+  if (local) {
+    if (local.pin === pin) {
+      state.profile = local;
+      SavvioStorage.setActiveProfileId(local.id);
+      state.loginEntry = { name: "", pin: "" };
+      touchDailyStreak();
+      go("dashboard");
+    } else {
+      errEl.textContent = "Incorrect PIN";
+    }
+    return;
+  }
+  offerCreateProfile(name, pin);
+}
+
+function offerCreateProfile(name, pin) {
+  toast(`No profile found for "${name}" — let's create one!`);
+  state.onboard = { name, ageGroup: "", avatar: "", pin };
+  go("onboard-age");
+}
+
+async function completeCloudLogin(res, pin) {
+  const userId = res.profile.userId;
+  const dataRes = await SavvioCloud.restoreProfile(userId, res.sessionToken);
+  let saved = {};
+  if (dataRes && dataRes.ok) { try { saved = JSON.parse(dataRes.dataJson || "{}"); } catch (e) { saved = {}; } }
+  const existing = SavvioStorage.getProfile(userId);
+  const profile = {
+    id: userId, name: res.profile.name, ageGroup: res.profile.ageGroup, avatar: res.profile.avatar, pin,
+    xp: res.profile.xp || 0, streak: res.profile.streak || 0, lastActiveDate: res.profile.lastActiveDate || null,
+    createdDate: res.profile.createdDate || todayStr(),
+    goals: saved.goals || (existing && existing.goals) || [],
+    budget: saved.budget || (existing && existing.budget) || [],
+    lessonsCompleted: saved.lessonsCompleted || (existing && existing.lessonsCompleted) || [],
+    quizAttempts: saved.quizAttempts || (existing && existing.quizAttempts) || [],
+    badgesEarned: saved.badgesEarned || (existing && existing.badgesEarned) || [],
+    budgetPlan: saved.budgetPlan || (existing && existing.budgetPlan) || null,
+    cloudStatus: res.profile.status, sessionToken: res.sessionToken, sessionExpiry: null, locked: false,
+  };
+  SavvioStorage.saveProfile(profile);
+  SavvioStorage.setActiveProfileId(profile.id);
+  state.profile = profile;
+  state.loginEntry = { name: "", pin: "" };
+  closeModal();
+  touchDailyStreak();
+  toast(`Welcome back, ${profile.name}! 🌱`);
+  go("dashboard");
+}
+
+async function finalizeNewProfile() {
+  const profile = newProfile(state.onboard);
+  SavvioStorage.saveProfile(profile);
+  SavvioStorage.setActiveProfileId(profile.id);
+  state.profile = profile;
+  state.onboard = { name: "", ageGroup: "", avatar: "", pin: "" };
+  state.loginEntry = { name: "", pin: "" };
+  touchDailyStreak();
+  toast(`Welcome, ${profile.name}! 🌱`);
+  go("dashboard");
+  if (SavvioCloud.isConfigured()) {
+    const res = await SavvioCloud.registerProfile(profile.id, profile.name, profile.ageGroup, profile.avatar, profile.pin);
+    if (res && res.ok) {
+      profile.cloudStatus = res.status;
+      profile.sessionToken = res.sessionToken;
+      saveActive();
+    }
+  }
+}
+
+function editProfileModal() {
+  const p = state.profile;
   openModal(`
-    <div class="modal-head"><h3>Restore your profile</h3><button class="close-x" id="modal-close">✕</button></div>
-    <p style="color:var(--ink-soft);font-size:.85rem;">Find your Savvio ID on the Profile page of your other device, then enter it here with your PIN.</p>
-    <label for="restore-id">Savvio ID</label>
-    <input type="text" id="restore-id" placeholder="e.g. kid_abc123" />
-    <label for="restore-pin">PIN</label>
-    <input type="text" id="restore-pin" inputmode="numeric" maxlength="4" placeholder="4-digit PIN" />
-    <button class="btn btn-primary btn-block" id="restore-save" style="margin-top:14px;">Restore</button>
+    <div class="modal-head"><h3>Edit profile</h3><button class="close-x" id="modal-close">✕</button></div>
+    <label for="edit-name">Name</label>
+    <input type="text" id="edit-name" value="${escapeHtml(p.name)}" maxlength="20" />
+    <label>Avatar</label>
+    <div class="avatar-grid" id="edit-avatar-grid">
+      ${AVATARS.map(a => `<button type="button" class="avatar-choice ${p.avatar===a?'selected':''}" data-edit-avatar="${a}">${a}</button>`).join("")}
+    </div>
+    <button class="btn btn-primary btn-block" id="edit-profile-save" style="margin-top:14px;">Save changes</button>
+  `);
+  let chosenAvatar = p.avatar;
+  document.getElementById("modal-close").onclick = closeModal;
+  document.querySelectorAll("[data-edit-avatar]").forEach(el => el.onclick = () => {
+    chosenAvatar = el.dataset.editAvatar;
+    document.querySelectorAll("[data-edit-avatar]").forEach(x => x.classList.toggle("selected", x.dataset.editAvatar === chosenAvatar));
+  });
+  document.getElementById("edit-profile-save").onclick = async () => {
+    const name = document.getElementById("edit-name").value.trim();
+    if (!name) { toast("Enter a name"); return; }
+    p.name = name;
+    p.avatar = chosenAvatar;
+    saveActive();
+    if (SavvioCloud.isConfigured() && p.sessionToken) {
+      const res = await SavvioCloud.updateProfile(p.id, p.sessionToken, name, p.ageGroup, chosenAvatar);
+      if (res && res.locked) { lockProfileLocally(); }
+    }
+    closeModal();
+    render();
+    toast("Profile updated");
+  };
+}
+
+function changePinModal() {
+  const p = state.profile;
+  openModal(`
+    <div class="modal-head"><h3>Change PIN</h3><button class="close-x" id="modal-close">✕</button></div>
+    <label for="cp-current">Current PIN</label>
+    <input type="text" id="cp-current" inputmode="numeric" maxlength="4" placeholder="••••" />
+    <label for="cp-new">New PIN</label>
+    <input type="text" id="cp-new" inputmode="numeric" maxlength="4" placeholder="••••" />
+    <label for="cp-confirm">Confirm new PIN</label>
+    <input type="text" id="cp-confirm" inputmode="numeric" maxlength="4" placeholder="••••" />
+    <button class="btn btn-primary btn-block" id="cp-save" style="margin-top:14px;">Update PIN</button>
   `);
   document.getElementById("modal-close").onclick = closeModal;
-  document.getElementById("restore-save").onclick = async () => {
-    const id = document.getElementById("restore-id").value.trim();
-    const pin = document.getElementById("restore-pin").value.trim();
-    if (!id || pin.length !== 4) { toast("Enter your Savvio ID and 4-digit PIN"); return; }
-    const loginRes = await SavvioCloud.loginProfile(id, pin);
-    if (!loginRes || !loginRes.ok) { toast((loginRes && loginRes.error) || "Couldn't restore — check your ID and PIN"); return; }
-    const dataRes = await SavvioCloud.restoreProfile(id, loginRes.sessionToken);
-    if (!dataRes || !dataRes.ok) { toast("Couldn't load your data — try again"); return; }
-    let saved = {};
-    try { saved = JSON.parse(dataRes.dataJson || "{}"); } catch (e) { saved = {}; }
-    const profile = {
-      id, name: loginRes.profile.name, ageGroup: loginRes.profile.ageGroup, avatar: loginRes.profile.avatar, pin,
-      xp: loginRes.profile.xp || 0, streak: loginRes.profile.streak || 0, lastActiveDate: loginRes.profile.lastActiveDate || null,
-      createdDate: loginRes.profile.createdDate || todayStr(),
-      goals: saved.goals || [], budget: saved.budget || [],
-      lessonsCompleted: saved.lessonsCompleted || [], quizAttempts: saved.quizAttempts || [],
-      badgesEarned: saved.badgesEarned || [],
-      cloudStatus: loginRes.profile.status, sessionToken: loginRes.sessionToken, sessionExpiry: null, locked: false,
-    };
-    SavvioStorage.saveProfile(profile);
-    SavvioStorage.setActiveProfileId(profile.id);
-    state.profile = profile;
+  document.getElementById("cp-save").onclick = async () => {
+    const current = document.getElementById("cp-current").value.trim();
+    const next = document.getElementById("cp-new").value.trim();
+    const confirm = document.getElementById("cp-confirm").value.trim();
+    if (!/^\d{4}$/.test(next) || next !== confirm) { toast("New PIN must match and be 4 digits"); return; }
+
+    if (SavvioCloud.isConfigured() && p.sessionToken) {
+      const res = await SavvioCloud.changePin(p.id, p.sessionToken, current, next);
+      if (res && res.ok) {
+        p.pin = next;
+        saveActive();
+        closeModal();
+        toast("PIN updated");
+        return;
+      }
+      if (res && res.locked) { lockProfileLocally(); closeModal(); return; }
+      if (res && !res.offline) { toast(res.error || "Couldn't update PIN"); return; }
+      // offline: fall through to local-only change below
+    }
+    if (p.pin !== current) { toast("Current PIN is incorrect"); return; }
+    p.pin = next;
+    saveActive();
     closeModal();
-    touchDailyStreak();
-    toast(`Welcome back, ${profile.name}! 🌱`);
-    go("dashboard");
+    toast("PIN updated on this device");
   };
 }
 
@@ -662,6 +783,85 @@ function catInfo(type, id) {
   return BUDGET_CATEGORIES[type].find(c => c.id === id) || { label:id, icon:"💵" };
 }
 
+// ---------------------------------------------------------------
+// Budget Planner (separate from the Budget tracker — this plans
+// ahead, the tracker logs what actually happened)
+// ---------------------------------------------------------------
+const PLANNER_PRESETS = {
+  balanced: { label: "Balanced", save: 40, spend: 40, give: 20 },
+  saver: { label: "Big saver", save: 60, spend: 30, give: 10 },
+  even: { label: "Even thirds", save: 34, spend: 33, give: 33 },
+};
+
+function updatePlannerDisplay() {
+  const plan = state.plannerDraft;
+  const income = Number(plan.income) || 0;
+  const setAmt = (id, pct) => { const el = document.getElementById(id); if (el) el.textContent = `${pct}% · ${money((income*pct)/100)}`; };
+  setAmt("plan-save-amt", plan.save);
+  setAmt("plan-spend-amt", plan.spend);
+  setAmt("plan-give-amt", plan.give);
+  const total = plan.save + plan.spend + plan.give;
+  const msgEl = document.getElementById("plan-total-msg");
+  if (msgEl) {
+    msgEl.className = `health-msg ${total===100?'good':total>100?'bad':'warn'}`;
+    msgEl.textContent = total === 100 ? "Perfectly allocated — 100%. 🌟" : total > 100 ? `Over by ${total-100}% — nudge a slider down.` : `${100-total}% left to allocate.`;
+  }
+}
+
+function renderPlanner() {
+  const p = state.profile;
+  if (!state.plannerDraft) state.plannerDraft = { ...(p.budgetPlan || { income: 20, save: 40, spend: 40, give: 20 }) };
+  const plan = state.plannerDraft;
+  const income = Number(plan.income) || 0;
+  const saveAmt = (income * plan.save) / 100;
+  const spendAmt = (income * plan.spend) / 100;
+  const giveAmt = (income * plan.give) / 100;
+  const totalPct = plan.save + plan.spend + plan.give;
+  const tip = p.ageGroup === "kids"
+    ? "Try saving a little before you plan how to spend the rest — future you will be glad."
+    : "A common starting point is roughly 40% save, 40% spend, 20% give or shared costs — adjust it to fit your life.";
+
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Budget Planner</h2></div>
+    <p style="color:var(--ink-soft);font-size:.88rem;margin-top:0;">Plan ahead for money you expect — separate from your Budget tracker, which logs what already happened.</p>
+
+    <div class="card">
+      <label for="plan-income">How much money are you planning for?</label>
+      <input type="number" id="plan-income" min="0" step="0.01" value="${income}" />
+
+      <label style="margin-top:14px;">Quick presets</label>
+      <div class="tab-row">
+        ${Object.entries(PLANNER_PRESETS).map(([key,pr]) => `<button data-preset="${key}" style="flex:0 0 auto;padding:8px 14px;">${pr.label}</button>`).join("")}
+      </div>
+
+      <div class="card-flat">
+        <div style="display:flex;justify-content:space-between;"><span>🐷 Save</span><strong id="plan-save-amt">${plan.save}% · ${money(saveAmt)}</strong></div>
+        <input type="range" min="0" max="100" id="plan-save" value="${plan.save}" />
+      </div>
+      <div class="card-flat">
+        <div style="display:flex;justify-content:space-between;"><span>🛍️ Spend</span><strong id="plan-spend-amt">${plan.spend}% · ${money(spendAmt)}</strong></div>
+        <input type="range" min="0" max="100" id="plan-spend" value="${plan.spend}" />
+      </div>
+      <div class="card-flat">
+        <div style="display:flex;justify-content:space-between;"><span>🎁 Give / shared</span><strong id="plan-give-amt">${plan.give}% · ${money(giveAmt)}</strong></div>
+        <input type="range" min="0" max="100" id="plan-give" value="${plan.give}" />
+      </div>
+
+      <div class="health-msg ${totalPct===100?'good':totalPct>100?'bad':'warn'}" id="plan-total-msg" style="margin-top:4px;">
+        ${totalPct === 100 ? "Perfectly allocated — 100%. 🌟" : totalPct > 100 ? `Over by ${totalPct-100}% — nudge a slider down.` : `${100-totalPct}% left to allocate.`}
+      </div>
+    </div>
+
+    <div class="card tip-card">
+      <div class="eyebrow">Planning tip</div>
+      <p style="margin:6px 0 0;">${tip}</p>
+    </div>
+
+    <button class="btn btn-primary btn-block" id="plan-save-btn">Save this plan</button>
+    <button class="btn btn-outline btn-block" data-nav="budget" style="margin-top:8px;">← Back to Budget</button>
+  `, "budget");
+}
+
 function renderBudget() {
   const p = state.profile;
   const { income, expense, entries } = budgetTotals(p, state.budgetRange);
@@ -676,7 +876,8 @@ function renderBudget() {
 
   return shell(`
     <div class="section-head" style="margin-top:0;"><h2>Budget</h2></div>
-    <button class="btn btn-coral btn-block" id="new-txn-btn" style="margin-bottom:12px;">+ Log money in or out</button>
+    <button class="btn btn-coral btn-block" id="new-txn-btn" style="margin-bottom:10px;">+ Log money in or out</button>
+    <button class="btn btn-outline btn-block" data-nav="planner" style="margin-bottom:12px;">🧮 Open Budget Planner</button>
 
     <div class="card">
       <div class="tab-row">
@@ -912,14 +1113,15 @@ function renderProfile() {
         <button data-profile-age="teens" class="${p.ageGroup==='teens'?'selected':''}">🧑<br>13–18</button>
       </div>
     </div>
+    <button class="btn btn-outline btn-block" id="edit-profile-btn">✏️ Edit name &amp; avatar</button>
+    <button class="btn btn-outline btn-block" id="change-pin-btn" style="margin-top:10px;">🔑 Change PIN</button>
     ${SavvioCloud.isConfigured() ? `
-    <div class="card">
+    <div class="card" style="margin-top:14px;">
       <label>Cloud sync</label>
-      <p style="margin:0 0 8px;font-size:.85rem;">Status: <span class="status-pill status-${p.cloudStatus||'offline'}">${p.cloudStatus||'offline'}</span></p>
-      <label>Your Savvio ID <span style="font-weight:400;color:var(--ink-faint);">(use this to restore your profile on another device)</span></label>
-      <input type="text" readonly value="${p.id}" onclick="this.select()" />
+      <p style="margin:0;font-size:.85rem;">Status: <span class="status-pill status-${p.cloudStatus||'offline'}">${p.cloudStatus||'offline'}</span></p>
+      <p style="margin:8px 0 0;font-size:.78rem;color:var(--ink-faint);">Log in on another device with your name and PIN to pick up right where you left off.</p>
     </div>` : ""}
-    <button class="btn btn-outline btn-block" id="switch-profile-btn">Switch profile</button>
+    <button class="btn btn-outline btn-block" id="switch-profile-btn" style="margin-top:14px;">Switch profile</button>
     <button class="btn btn-outline btn-block" id="logout-btn" style="margin-top:10px;color:var(--danger);">Lock &amp; sign out</button>
   `, "profile");
 }
@@ -930,24 +1132,16 @@ function renderProfile() {
 function bindScreenEvents() {
   document.querySelectorAll("[data-nav]").forEach(el => el.onclick = () => go(el.dataset.nav));
 
-  const restoreBtn = document.getElementById("restore-profile-btn");
-  if (restoreBtn) restoreBtn.onclick = () => restoreProfileModal();
+  const liSubmit = document.getElementById("li-submit");
+  if (liSubmit) liSubmit.onclick = () => submitLoginEntry();
+  const liPinField = document.getElementById("li-pin");
+  if (liPinField) liPinField.onkeydown = (e) => { if (e.key === "Enter") submitLoginEntry(); };
 
   document.querySelectorAll("[data-select-profile]").forEach(el => el.onclick = () => {
     state.pinTargetId = el.dataset.selectProfile;
     state.pinBuffer = "";
     go("pin-login");
   });
-
-  // Onboarding: name
-  const nameInput = document.getElementById("ob-name");
-  const nameNext = document.getElementById("ob-name-next");
-  if (nameNext) nameNext.onclick = () => {
-    const v = nameInput.value.trim();
-    if (!v) { toast("Enter your name"); return; }
-    state.onboard.name = v;
-    go("onboard-age");
-  };
 
   document.querySelectorAll("[data-age]").forEach(el => el.onclick = () => {
     state.onboard.ageGroup = el.dataset.age;
@@ -961,9 +1155,9 @@ function bindScreenEvents() {
     render();
   });
   const avatarNext = document.getElementById("ob-avatar-next");
-  if (avatarNext) avatarNext.onclick = () => { state.pinBuffer = ""; go("onboard-pin"); };
+  if (avatarNext) avatarNext.onclick = () => finalizeNewProfile();
 
-  // PIN pad (shared between onboarding + login)
+  // PIN pad (used by the existing-device quick-login screen)
   document.querySelectorAll("[data-pinkey]").forEach(el => el.onclick = () => handlePinKey(el.dataset.pinkey));
 
   // Goals
@@ -983,6 +1177,25 @@ function bindScreenEvents() {
     saveActive();
     render();
   });
+
+  // Budget Planner
+  const planIncome = document.getElementById("plan-income");
+  if (planIncome) planIncome.oninput = () => { state.plannerDraft.income = parseFloat(planIncome.value) || 0; updatePlannerDisplay(); };
+  ["save","spend","give"].forEach(key => {
+    const el = document.getElementById("plan-" + key);
+    if (el) el.oninput = () => { state.plannerDraft[key] = parseInt(el.value, 10); updatePlannerDisplay(); };
+  });
+  document.querySelectorAll("[data-preset]").forEach(el => el.onclick = () => {
+    const pr = PLANNER_PRESETS[el.dataset.preset];
+    state.plannerDraft.save = pr.save; state.plannerDraft.spend = pr.spend; state.plannerDraft.give = pr.give;
+    render();
+  });
+  const planSaveBtn = document.getElementById("plan-save-btn");
+  if (planSaveBtn) planSaveBtn.onclick = () => {
+    state.profile.budgetPlan = { ...state.plannerDraft };
+    saveActive();
+    toast("Plan saved 🌱");
+  };
 
   // Budget
   const newTxnBtn = document.getElementById("new-txn-btn");
@@ -1042,15 +1255,22 @@ function bindScreenEvents() {
   if (lockedSwitchBtn) lockedSwitchBtn.onclick = () => { state.profile = null; go("splash"); };
 
   // Rewards / profile
+  const editProfileBtn = document.getElementById("edit-profile-btn");
+  if (editProfileBtn) editProfileBtn.onclick = () => editProfileModal();
+  const changePinBtn = document.getElementById("change-pin-btn");
+  if (changePinBtn) changePinBtn.onclick = () => changePinModal();
   document.querySelectorAll("[data-profile-age]").forEach(el => el.onclick = () => {
     state.profile.ageGroup = el.dataset.profileAge;
     saveActive();
+    if (SavvioCloud.isConfigured() && state.profile.sessionToken) {
+      SavvioCloud.updateProfile(state.profile.id, state.profile.sessionToken, state.profile.name, state.profile.ageGroup, state.profile.avatar);
+    }
     render();
   });
   const switchBtn = document.getElementById("switch-profile-btn");
-  if (switchBtn) switchBtn.onclick = () => { state.profile = null; go("splash"); };
+  if (switchBtn) switchBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; go("splash"); };
   const logoutBtn = document.getElementById("logout-btn");
-  if (logoutBtn) logoutBtn.onclick = () => { state.profile = null; go("splash"); };
+  if (logoutBtn) logoutBtn.onclick = () => { state.profile = null; state.plannerDraft = null; state.loginEntry = { name:"", pin:"" }; go("splash"); };
 }
 
 async function unlockProfile(profileId, pin) {
@@ -1109,26 +1329,7 @@ function handlePinKey(key) {
   if (key === "⌫") { state.pinBuffer = state.pinBuffer.slice(0,-1); render(); return; }
   if (key === "OK") {
     if (state.pinBuffer.length !== 4) { toast("Enter 4 digits"); return; }
-    if (state.screen === "onboard-pin") {
-      state.onboard.pin = state.pinBuffer;
-      const profile = newProfile(state.onboard);
-      SavvioStorage.saveProfile(profile);
-      SavvioStorage.setActiveProfileId(profile.id);
-      state.profile = profile;
-      state.onboard = { name:"", ageGroup:"", avatar:"", pin:"" };
-      touchDailyStreak();
-      toast(`Welcome, ${profile.name}! 🌱`);
-      go("dashboard");
-      if (SavvioCloud.isConfigured()) {
-        SavvioCloud.registerProfile(profile.id, profile.name, profile.ageGroup, profile.avatar, profile.pin)
-          .then(res => {
-            if (res && res.ok) {
-              profile.cloudStatus = res.status;
-              saveActive();
-            }
-          });
-      }
-    } else if (state.screen === "pin-login") {
+    if (state.screen === "pin-login") {
       unlockProfile(state.pinTargetId, state.pinBuffer);
     }
     return;

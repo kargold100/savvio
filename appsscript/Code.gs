@@ -26,6 +26,16 @@ const SESSION_HOURS = 24;
 const ADMIN_SESSION_HOURS = 6;
 const MAX_FAILED_ATTEMPTS = 5;
 
+// Used only the very first time the Admins sheet is empty, and only if
+// Script Properties don't already define ADMIN_BOOTSTRAP_USERNAME /
+// ADMIN_BOOTSTRAP_PASSWORD. Script Properties always win if set — see
+// SETUP.md. NOTE: if this file is pushed to a public GitHub repo, these
+// defaults are visible to anyone who looks at the repo. Change the admin
+// password from the Admin portal (or Script Properties) right after your
+// first login if that matters to you.
+const DEFAULT_ADMIN_USERNAME = "sav_admin";
+const DEFAULT_ADMIN_PASSWORD = "SavAdmin123$";
+
 const USER_HEADERS = ["userId","name","ageGroup","avatar","pinHash","pinSalt","status","xp","streak","lastActiveDate","createdDate","dataJson","sessionToken","sessionExpiry","failedAttempts"];
 const ADMIN_HEADERS = ["adminId","username","passwordHash","passwordSalt","createdDate","sessionToken","sessionExpiry"];
 const AUDIT_HEADERS = ["timestamp","admin","action","targetUserId","details"];
@@ -44,9 +54,12 @@ function doPost(e) {
     switch (body.action) {
       case "registerProfile": return jsonOut(registerProfile(body));
       case "loginProfile":    return jsonOut(loginProfile(body));
+      case "loginByName":     return jsonOut(loginByName(body));
       case "checkStatus":     return jsonOut(checkStatus(body));
       case "syncProfile":     return jsonOut(syncProfile(body));
       case "restoreProfile":  return jsonOut(restoreProfile(body));
+      case "updateProfile":   return jsonOut(updateProfile(body));
+      case "changePin":       return jsonOut(changePin(body));
 
       case "adminLogin":        return jsonOut(adminLogin(body));
       case "adminListUsers":    return jsonOut(adminListUsers(body));
@@ -145,16 +158,19 @@ function registerProfile(body) {
   if (!userId || !name || !pin) return { ok: false, error: "Missing fields" };
   if (findUser(userId)) return { ok: false, error: "Profile already exists" };
   const salt = randomSalt();
+  const sessionToken = randomToken();
+  const sessionExpiry = hoursFromNow(SESSION_HOURS);
   appendUserRow({
     userId, name, ageGroup, avatar,
     pinHash: hashWithSalt(pin, salt), pinSalt: salt,
     status: "pending", xp: 0, streak: 0, lastActiveDate: "", createdDate: nowIso(),
-    dataJson: "{}", sessionToken: "", sessionExpiry: "", failedAttempts: 0,
+    dataJson: "{}", sessionToken, sessionExpiry, failedAttempts: 0,
   });
-  // New profiles start "pending" until a parent/admin approves them in the
-  // Admin portal. Approval only gates cloud sync + cross-device restore —
-  // the app itself keeps working fully offline on the original device.
-  return { ok: true, status: "pending" };
+  // New profiles start "pending" so they show up for parent review in the
+  // Admin portal, but that status doesn't block anything technically — sync
+  // and restore work right away. Approve/lock are for parental oversight,
+  // not a signup gate.
+  return { ok: true, status: "pending", sessionToken };
 }
 
 function loginProfile(body) {
@@ -189,6 +205,45 @@ function checkStatus(body) {
   return { ok: true, status: user.status };
 }
 
+// Lets the client log in with just a name + PIN instead of the internal
+// userId — used for "log in on a new device" and "is this profile new".
+function loginByName(body) {
+  const { name, pin } = body;
+  if (!name || !pin) return { ok: false, error: "Missing fields" };
+  const rows = readRows(usersSheet(), USER_HEADERS);
+  const matches = rows.filter(r => String(r.name).trim().toLowerCase() === String(name).trim().toLowerCase());
+  if (matches.length === 0) return { ok: false, error: "not_found", notFound: true };
+
+  for (const user of matches) {
+    if (user.status === "locked") continue;
+    if (hashWithSalt(pin, user.pinSalt) === user.pinHash) {
+      user.failedAttempts = 0;
+      user.sessionToken = randomToken();
+      user.sessionExpiry = hoursFromNow(SESSION_HOURS);
+      writeUserRow(user);
+      return { ok: true, sessionToken: user.sessionToken, profile: publicUser(user) };
+    }
+  }
+
+  if (matches.length === 1 && matches[0].status === "locked") {
+    return { ok: false, error: "locked", locked: true };
+  }
+
+  // Name matched but no PIN matched any non-locked row — count it as a
+  // failed attempt against the first match, same anti-bruteforce rule as
+  // the ID-based login.
+  const target = matches[0];
+  const attempts = Number(target.failedAttempts || 0) + 1;
+  target.failedAttempts = attempts;
+  if (attempts >= MAX_FAILED_ATTEMPTS) target.status = "locked";
+  writeUserRow(target);
+  return {
+    ok: false,
+    error: attempts >= MAX_FAILED_ATTEMPTS ? "locked" : "Incorrect PIN",
+    locked: attempts >= MAX_FAILED_ATTEMPTS,
+  };
+}
+
 function validSession(user, token) {
   return !!(user && user.sessionToken && token && user.sessionToken === token &&
     user.sessionExpiry && new Date(user.sessionExpiry) > new Date());
@@ -214,6 +269,34 @@ function restoreProfile(body) {
   return { ok: true, profile: publicUser(user), dataJson: user.dataJson };
 }
 
+function updateProfile(body) {
+  const { userId, sessionToken, name, ageGroup, avatar } = body;
+  const user = findUser(userId);
+  if (!user) return { ok: false, error: "Profile not found" };
+  if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
+  if (user.status === "locked") return { ok: false, error: "locked", locked: true };
+  if (name) user.name = name;
+  if (ageGroup) user.ageGroup = ageGroup;
+  if (avatar) user.avatar = avatar;
+  writeUserRow(user);
+  return { ok: true, profile: publicUser(user) };
+}
+
+function changePin(body) {
+  const { userId, sessionToken, currentPin, newPin } = body;
+  const user = findUser(userId);
+  if (!user) return { ok: false, error: "Profile not found" };
+  if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
+  if (user.status === "locked") return { ok: false, error: "locked", locked: true };
+  if (hashWithSalt(currentPin, user.pinSalt) !== user.pinHash) return { ok: false, error: "Current PIN is incorrect" };
+  if (!/^\d{4}$/.test(String(newPin))) return { ok: false, error: "New PIN must be 4 digits" };
+  const salt = randomSalt();
+  user.pinHash = hashWithSalt(newPin, salt);
+  user.pinSalt = salt;
+  writeUserRow(user);
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------
 // Admin bootstrap & auth
 // ---------------------------------------------------------------
@@ -224,8 +307,8 @@ function bootstrapAdmin(sh) {
   const rows = readRows(sh, ADMIN_HEADERS);
   if (rows.length > 0) return;
   const props = PropertiesService.getScriptProperties();
-  const username = props.getProperty("ADMIN_BOOTSTRAP_USERNAME");
-  const password = props.getProperty("ADMIN_BOOTSTRAP_PASSWORD");
+  const username = props.getProperty("ADMIN_BOOTSTRAP_USERNAME") || DEFAULT_ADMIN_USERNAME;
+  const password = props.getProperty("ADMIN_BOOTSTRAP_PASSWORD") || DEFAULT_ADMIN_PASSWORD;
   if (!username || !password) return;
   const salt = randomSalt();
   sh.appendRow([Utilities.getUuid(), username, hashWithSalt(password, salt), salt, nowIso(), "", ""]);

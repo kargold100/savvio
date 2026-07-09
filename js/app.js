@@ -25,6 +25,8 @@ const BUDGET_CATEGORIES = {
     { id:"pocketmoney", label:"Pocket Money", icon:"👛" },
     { id:"earnings", label:"Earnings", icon:"💪" },
     { id:"gifts", label:"Gifts", icon:"🎁" },
+    { id:"odd_jobs", label:"Odd Jobs", icon:"🧹" },
+    { id:"selling", label:"Selling Things", icon:"🏷️" },
     { id:"other_income", label:"Other", icon:"➕" },
   ],
   expense: [
@@ -33,6 +35,10 @@ const BUDGET_CATEGORIES = {
     { id:"toys", label:"Toys", icon:"🧸" },
     { id:"school", label:"School", icon:"🎒" },
     { id:"entertainment", label:"Entertainment", icon:"🎬" },
+    { id:"transport", label:"Transport", icon:"🚌" },
+    { id:"clothes", label:"Clothes", icon:"👕" },
+    { id:"subscriptions", label:"Subscriptions", icon:"📱" },
+    { id:"giving", label:"Giving", icon:"💗" },
     { id:"savings", label:"Savings", icon:"🐷" },
     { id:"other_expense", label:"Other", icon:"➕" },
   ],
@@ -42,15 +48,20 @@ const BADGES = [
   { id:"first_goal", name:"Goal Setter", icon:"🎯", check:p => p.goals.length >= 1 },
   { id:"goal_getter", name:"Goal Getter", icon:"🏆", check:p => p.goals.filter(g=>g.status==="completed").length >= 3 },
   { id:"big_saver", name:"Big Saver", icon:"💎", check:p => p.goals.reduce((s,g)=>s+g.current,0) >= 100 },
+  { id:"super_saver", name:"Super Saver", icon:"👑", check:p => p.goals.reduce((s,g)=>s+g.current,0) >= 500 },
   { id:"quiz_starter", name:"Quiz Starter", icon:"❓", check:p => p.quizAttempts.length >= 1 },
   { id:"quiz_whiz", name:"Quiz Whiz", icon:"🧠", check:p => p.quizAttempts.length >= 10 },
   { id:"perfect_score", name:"Perfect Score", icon:"⭐", check:p => p.quizAttempts.some(a=>a.total>0 && a.score===a.total) },
   { id:"budget_boss", name:"Budget Boss", icon:"📒", check:p => p.budget.length >= 30 },
   { id:"lesson_learner", name:"Lesson Learner", icon:"📘", check:p => p.lessonsCompleted.length >= 1 },
-  { id:"know_it_all", name:"Know It All", icon:"🎓", check:p => p.lessonsCompleted.length >= LESSONS.length },
+  { id:"know_it_all", name:"Finance Genius", icon:"🎓", check:p => p.lessonsCompleted.length >= LESSONS.length },
   { id:"streak_7", name:"7-Day Streak", icon:"🔥", check:p => p.streak >= 7 },
   { id:"streak_30", name:"30-Day Streak", icon:"🌟", check:p => p.streak >= 30 },
   { id:"level_5", name:"Sapling Status", icon:"🌿", check:p => getLevelInfo(p.xp).level >= 5 },
+  { id:"first_challenge", name:"Challenge Accepted", icon:"🚀", check:p => Object.values(p.challengeProgress||{}).some(c=>c.completed) },
+  { id:"challenge_master", name:"Challenge Master", icon:"🏅", check:p => Object.values(p.challengeProgress||{}).filter(c=>c.completed).length >= 5 },
+  { id:"needswants_pro", name:"Needs vs Wants Pro", icon:"⚖️", check:p => (p.gameStats && p.gameStats.needswants ? p.gameStats.needswants.correct : 0) >= 20 },
+  { id:"scam_spotter", name:"Scam Spotter", icon:"🛡️", check:p => (p.gameStats && p.gameStats.scams ? p.gameStats.scams.correct : 0) >= 15 },
 ];
 
 const DAILY_TIP_POOL = TIPS;
@@ -79,6 +90,8 @@ const state = {
   manageKids: null,
   manageTasks: null,
   managePerks: null,
+  playTab: "challenges",
+  gameSession: null,
 };
 
 const $app = () => document.getElementById("app");
@@ -153,6 +166,27 @@ function openModal(innerHtml) {
 // ---------------------------------------------------------------
 // Profile / persistence helpers
 // ---------------------------------------------------------------
+function applyPrefs(p) {
+  const prefs = (p && p.prefs) || {};
+  document.body.classList.toggle("dark", !!prefs.darkMode);
+  document.body.classList.toggle("large-text", !!prefs.largeText);
+}
+
+function ensureProfileDefaults(p) {
+  if (!p) return p;
+  if (!p.badgesEarned) p.badgesEarned = [];
+  if (!p.quizAttempts) p.quizAttempts = [];
+  if (!p.challengeProgress) p.challengeProgress = {};
+  if (!p.gameStats) p.gameStats = { needswants: { played: 0, correct: 0 }, scams: { played: 0, correct: 0 } };
+  if (!p.wishlist) p.wishlist = [];
+  if (!p.subscriptions) p.subscriptions = [];
+  if (!p.habitLog) p.habitLog = {};
+  if (!p.prefs) p.prefs = { darkMode: false, largeText: false };
+  if (!p.role) p.role = "kid";
+  if (typeof p.stars !== "number") p.stars = 0;
+  return p;
+}
+
 function newProfile({ name, ageGroup, avatar, pin, role }) {
   return {
     id: uid("kid"),
@@ -161,6 +195,12 @@ function newProfile({ name, ageGroup, avatar, pin, role }) {
     createdDate: todayStr(),
     goals: [], budget: [], lessonsCompleted: [], quizAttempts: [],
     budgetPlan: null, // { income, save, spend, give }
+    challengeProgress: {}, // { challengeId: { count, completed, lastDate } }
+    gameStats: { needswants: { played: 0, correct: 0 }, scams: { played: 0, correct: 0 } },
+    wishlist: [], // { id, title, price, priority, addedDate }
+    subscriptions: [], // { id, name, cost, cycle, renewalDay }
+    habitLog: {}, // { "YYYY-MM-DD": { habitId: true } }
+    prefs: { darkMode: false, largeText: false },
     // Cloud sync fields (all local-only and harmless until js/cloud.js has a PROXY_URL)
     cloudStatus: "offline", // offline | pending | active | rejected | locked
     sessionToken: null, sessionExpiry: null,
@@ -184,6 +224,8 @@ function scheduleCloudSync() {
       goals: p.goals, budget: p.budget,
       lessonsCompleted: p.lessonsCompleted, quizAttempts: p.quizAttempts,
       badgesEarned: p.badgesEarned || [], budgetPlan: p.budgetPlan || null,
+      challengeProgress: p.challengeProgress || {}, gameStats: p.gameStats || {},
+      wishlist: p.wishlist || [], subscriptions: p.subscriptions || [], habitLog: p.habitLog || {},
     };
     const res = await SavvioCloud.syncProfile(p.id, p.sessionToken, p.xp, p.streak, p.lastActiveDate, payload);
     if (res && res.ok) {
@@ -270,8 +312,11 @@ function render() {
     case "pin-login": html = renderPinLogin(); break;
     case "dashboard": html = renderDashboard(); break;
     case "goals": html = renderGoals(); break;
+    case "wishlist": html = renderWishlist(); break;
     case "budget": html = renderBudget(); break;
     case "planner": html = renderPlanner(); break;
+    case "calculators": html = renderCalculators(); break;
+    case "subscriptions": html = renderSubscriptions(); break;
     case "lessons": html = renderLessons(); break;
     case "lesson-detail": html = renderLessonDetail(); break;
     case "quiz": html = renderQuizHub(); break;
@@ -284,6 +329,7 @@ function render() {
     case "chores": html = renderChores(); break;
     case "perks": html = renderPerks(); break;
     case "manage": html = renderManage(); break;
+    case "play": html = renderPlay(); break;
     default: html = renderSplash();
   }
   $app().innerHTML = html;
@@ -333,7 +379,7 @@ function renderSplash() {
           ${profiles.map(p => `
             <div class="profile-chip" data-select-profile="${p.id}" role="button" tabindex="0">
               <div class="av">${p.avatar}</div>
-              <div class="meta"><div class="n">${escapeHtml(p.name)}</div><div class="s">Level ${getLevelInfo(p.xp).level} · ${p.ageGroup === "kids" ? "Kid" : "Teen"}</div></div>
+              <div class="meta"><div class="n">${escapeHtml(p.name)}</div><div class="s">${p.role === "parent" ? "👪 Parent/Guardian" : `Level ${getLevelInfo(p.xp).level} · ${p.ageGroup === "kids" ? "Kid" : "Teen"}`}</div></div>
               ${p.cloudStatus && p.cloudStatus !== "offline" ? `<span class="status-pill status-${p.cloudStatus}">${p.cloudStatus}</span>` : ""}
               <div>›</div>
             </div>`).join("")}
@@ -485,11 +531,18 @@ async function completeCloudLogin(res, pin) {
     quizAttempts: saved.quizAttempts || (existing && existing.quizAttempts) || [],
     badgesEarned: saved.badgesEarned || (existing && existing.badgesEarned) || [],
     budgetPlan: saved.budgetPlan || (existing && existing.budgetPlan) || null,
+    challengeProgress: saved.challengeProgress || (existing && existing.challengeProgress) || {},
+    gameStats: saved.gameStats || (existing && existing.gameStats) || { needswants: { played: 0, correct: 0 }, scams: { played: 0, correct: 0 } },
+    wishlist: saved.wishlist || (existing && existing.wishlist) || [],
+    subscriptions: saved.subscriptions || (existing && existing.subscriptions) || [],
+    habitLog: saved.habitLog || (existing && existing.habitLog) || {},
+    prefs: (existing && existing.prefs) || { darkMode: false, largeText: false },
     cloudStatus: res.profile.status, sessionToken: res.sessionToken, sessionExpiry: null, locked: false,
   };
   SavvioStorage.saveProfile(profile);
   SavvioStorage.setActiveProfileId(profile.id);
   state.profile = profile;
+  applyPrefs(profile);
   state.loginEntry = { name: "", pin: "" };
   closeModal();
   touchDailyStreak();
@@ -504,6 +557,7 @@ async function finalizeNewProfile() {
   SavvioStorage.saveProfile(profile);
   SavvioStorage.setActiveProfileId(profile.id);
   state.profile = profile;
+  applyPrefs(profile);
   state.onboard = { name: "", ageGroup: "", avatar: "", pin: "", role: "" };
   state.loginEntry = { name: "", pin: "" };
   touchDailyStreak();
@@ -628,15 +682,76 @@ function renderRejected() {
 // ---------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------
+const HABITS = [
+  { id: "no-junk", label: "Didn't buy junk food", icon: "🍏" },
+  { id: "saved", label: "Saved some money", icon: "💰" },
+  { id: "packed-lunch", label: "Packed lunch", icon: "🥪" },
+  { id: "no-impulse", label: "No impulse purchase", icon: "🛑" },
+  { id: "read-lesson", label: "Read a lesson or tip", icon: "📘" },
+  { id: "chore", label: "Did a chore", icon: "🌟" },
+];
+
+// Rule-based "coach" message computed from the person's own real data —
+// no paid AI API involved, just simple comparisons. Falls back to null
+// (caller shows the static daily tip instead) when there isn't enough
+// data yet to say anything meaningful.
+function moneyCoachMessage(p) {
+  const now = new Date();
+  const cutoffThis = new Date(now); cutoffThis.setDate(now.getDate() - 7);
+  const cutoffLast = new Date(now); cutoffLast.setDate(now.getDate() - 14);
+  const thisWeek = p.budget.filter(e => e.type === "expense" && new Date(e.date + "T00:00:00") >= cutoffThis);
+  const lastWeek = p.budget.filter(e => e.type === "expense" && new Date(e.date + "T00:00:00") >= cutoffLast && new Date(e.date + "T00:00:00") < cutoffThis);
+
+  const sumBy = (arr) => { const m = {}; arr.forEach(e => { m[e.category] = (m[e.category] || 0) + e.amount; }); return m; };
+  const thisMap = sumBy(thisWeek), lastMap = sumBy(lastWeek);
+  let biggestIncrease = null, incAmt = 0;
+  Object.keys(thisMap).forEach(cat => {
+    const diff = thisMap[cat] - (lastMap[cat] || 0);
+    if (diff > incAmt) { incAmt = diff; biggestIncrease = cat; }
+  });
+  if (biggestIncrease && incAmt >= 3 && lastWeek.length > 0) {
+    return { text: `You spent more on ${catInfo("expense", biggestIncrease).label} this week than last (+${money(incAmt)}). Worth a look?` };
+  }
+
+  if (p.streak >= 3) {
+    return { text: `You've kept your streak going for ${p.streak} days — that consistency is exactly how good habits form.` };
+  }
+
+  const activeGoal = p.goals.find(g => g.status !== "completed");
+  if (activeGoal) {
+    const remaining = activeGoal.target - activeGoal.current;
+    if (remaining > 0) {
+      return { text: `You're ${money(remaining)} away from "${activeGoal.title}". A few more small deposits and you're there.` };
+    }
+  }
+  return null;
+}
+
+function toggleHabit(habitId) {
+  const p = state.profile;
+  const today = todayStr();
+  if (!p.habitLog[today]) p.habitLog[today] = {};
+  const wasAllDone = HABITS.every(h => p.habitLog[today][h.id]);
+  p.habitLog[today][habitId] = !p.habitLog[today][habitId];
+  const nowAllDone = HABITS.every(h => p.habitLog[today][h.id]);
+  saveActive();
+  if (!wasAllDone && nowAllDone) { addXp(15, "Perfect habit day"); checkNewBadges(); }
+  render();
+}
+
 function renderDashboard() {
   const p = state.profile;
   const lvl = getLevelInfo(p.xp);
   const pct = Math.min(100, Math.round((lvl.xpIntoLevel / lvl.xpForNext) * 100));
   const tip = dailyTipFor(p);
+  const coach = moneyCoachMessage(p);
   const activeGoals = p.goals.filter(g => g.status !== "completed").slice(0,2);
   const now = new Date();
   const hr = now.getHours();
   const greet = hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening";
+  const today = todayStr();
+  const todaysHabits = p.habitLog[today] || {};
+  const habitDoneCount = HABITS.filter(h => todaysHabits[h.id]).length;
 
   const { income, expense } = budgetTotals(p, "week");
 
@@ -661,9 +776,16 @@ function renderDashboard() {
       </div>
     </div>
 
-    <div class="card tip-card">
-      <div class="eyebrow">Today's tip</div>
-      <p style="margin:6px 0 0;">${escapeHtml(tip.text)}</p>
+    <div class="card ${coach ? 'coach-card' : 'tip-card'}">
+      <div class="eyebrow">${coach ? "Money Coach" : "Today's tip"}</div>
+      <p style="margin:6px 0 0;">${coach ? escapeHtml(coach.text) : escapeHtml(tip.text)}</p>
+    </div>
+
+    <div class="section-head" style="margin-top:14px;"><h2>Today's habits</h2><span style="font-size:.78rem;color:var(--ink-faint);">${habitDoneCount}/${HABITS.length}</span></div>
+    <div class="card">
+      <div class="habit-list">
+        ${HABITS.map(h => `<div class="habit-row ${todaysHabits[h.id]?'done':''}" data-habit-toggle="${h.id}"><div class="check-circle">${todaysHabits[h.id]?'✓':''}</div><div class="label">${h.icon} ${h.label}</div></div>`).join("")}
+      </div>
     </div>
 
     <div class="quick-actions">
@@ -671,6 +793,7 @@ function renderDashboard() {
       <button data-nav="budget"><span class="icon">📒</span>Budget</button>
       <button data-nav="lessons"><span class="icon">📘</span>Learn</button>
       <button data-nav="quiz"><span class="icon">❓</span>Quiz</button>
+      <button data-nav="play"><span class="icon">🎮</span>Play</button>
     </div>
 
     <div class="section-head"><h2>Savings goals</h2><button class="link" data-nav="goals">See all</button></div>
@@ -689,38 +812,55 @@ function renderDashboard() {
   `, "dashboard");
 }
 
+function trafficLight(color) {
+  return `<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle;"></span>`;
+}
+
 function budgetHealthHtml(income, expense) {
   if (income === 0 && expense === 0) {
-    return `<div class="health-msg warn">Log some income or spending to see how you're doing.</div>`;
+    return `<div class="health-msg warn">${trafficLight('#F3A93A')}Log some income or spending to see how you're doing.</div>`;
   }
   const remaining = income - expense;
   if (remaining >= 0 && expense <= income * 0.7) {
-    return `<div class="health-msg good">You saved more than you spent this week. Great job! 🌟</div>`;
+    return `<div class="health-msg good">${trafficLight('#2FA84F')}You saved more than you spent this week. Great job! 🌟</div>`;
   }
   if (remaining >= 0) {
-    return `<div class="health-msg warn">You're breaking even. A little more saved would help. 🌱</div>`;
+    return `<div class="health-msg warn">${trafficLight('#F3A93A')}You're breaking even. A little more saved would help. 🌱</div>`;
   }
-  return `<div class="health-msg bad">You spent more than you earned this week. Let's rebalance. 💡</div>`;
+  return `<div class="health-msg bad">${trafficLight('#E5484D')}You spent more than you earned this week. Let's rebalance. 💡</div>`;
 }
 
 // ---------------------------------------------------------------
 // Goals
 // ---------------------------------------------------------------
+function requiredMonthlySavings(g) {
+  if (!g.targetDate || g.status === "completed") return null;
+  const remaining = g.target - g.current;
+  if (remaining <= 0) return null;
+  const months = Math.max(1, (new Date(g.targetDate + "T00:00:00") - new Date()) / (1000*60*60*24*30.44));
+  if (months < 0.2) return null; // basically due already, not a useful monthly figure
+  return remaining / months;
+}
+
 function goalCardHtml(g) {
   const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
   const done = g.status === "completed";
+  const monthlyNeeded = requiredMonthlySavings(g);
   return `
     <div class="card goal-card ${done?'done':''}" data-goal-id="${g.id}">
       <div class="top-row">
-        <div>
-          <h3 style="margin-bottom:2px;">${escapeHtml(g.title)}</h3>
-          ${g.targetDate ? `<div style="font-size:.72rem;color:var(--ink-faint);">Target: ${fmtDate(g.targetDate)}</div>` : ""}
+        <div style="display:flex;gap:10px;align-items:flex-start;">
+          <div style="font-size:1.6rem;">${g.icon || "🎯"}</div>
+          <div>
+            <h3 style="margin-bottom:2px;">${escapeHtml(g.title)}</h3>
+            ${g.targetDate ? `<div style="font-size:.72rem;color:var(--ink-faint);">Target: ${fmtDate(g.targetDate)}</div>` : ""}
+          </div>
         </div>
         ${done ? `<span class="badge-pill">Done! 🎉</span>` : ""}
       </div>
       <div class="amount">${money(g.current)} <span style="color:var(--ink-faint);font-weight:400;font-size:.85rem;">of ${money(g.target)}</span></div>
       <div class="progress-track" style="margin-top:8px;"><div class="progress-fill" style="width:${pct}%;"></div></div>
-      <div class="pct">${pct}% complete</div>
+      <div class="pct">${pct}% complete${monthlyNeeded ? ` · save ~${money(monthlyNeeded)}/month to hit your date` : ""}</div>
       ${!done ? `
         <div class="actions">
           <button class="btn btn-primary btn-sm" data-goal-add="${g.id}">+ Add money</button>
@@ -740,19 +880,27 @@ function renderGoals() {
   const done = p.goals.filter(g => g.status === "completed");
   return shell(`
     <div class="section-head" style="margin-top:0;"><h2>Your goals</h2></div>
-    <button class="btn btn-coral btn-block" id="new-goal-btn" style="margin-bottom:14px;">+ New savings goal</button>
+    <button class="btn btn-coral btn-block" id="new-goal-btn" style="margin-bottom:10px;">+ New savings goal</button>
+    <button class="btn btn-outline btn-block" id="emergency-fund-btn" style="margin-bottom:10px;">🚨 Start an Emergency Fund</button>
+    <button class="btn btn-outline btn-block" data-nav="wishlist" style="margin-bottom:14px;">💭 Wishlist</button>
     ${active.length ? active.map(goalCardHtml).join("") : `<div class="card empty-state"><span class="emoji">🌱</span>No active goals. What are you saving for?</div>`}
     ${done.length ? `<div class="section-head"><h2>Completed 🎉</h2></div>${done.map(goalCardHtml).join("")}` : ""}
   `, "goals");
 }
 
-function goalFormModal(existing) {
-  const g = existing || { title:"", target:"", current:"0", targetDate:"" };
+const GOAL_ICONS = ["🎯","🏀","🎮","📱","🚗","🎓","✈️","🎁","💻","🚲","🐶","🚨","🎧","👟","📷","⚽"];
+
+function goalFormModal(existing, preset) {
+  const g = existing || preset || { title:"", target:"", current:"0", targetDate:"", icon:"🎯" };
   openModal(`
     <div class="modal-head"><h3>${existing?"Edit goal":"New savings goal"}</h3><button class="close-x" id="modal-close">✕</button></div>
     <label for="g-title">What are you saving for?</label>
     <input type="text" id="g-title" placeholder="e.g. New headphones" value="${escapeHtml(g.title)}" maxlength="40" />
-    <div class="field-row">
+    <label>Icon</label>
+    <div class="avatar-grid" id="g-icon-grid">
+      ${GOAL_ICONS.map(i => `<button type="button" class="avatar-choice ${(g.icon||'🎯')===i?'selected':''}" data-g-icon="${i}">${i}</button>`).join("")}
+    </div>
+    <div class="field-row" style="margin-top:10px;">
       <div>
         <label for="g-target">Target amount</label>
         <input type="number" id="g-target" min="1" step="0.01" value="${g.target}" />
@@ -766,7 +914,12 @@ function goalFormModal(existing) {
     <input type="date" id="g-date" value="${g.targetDate||""}" />
     <button class="btn btn-primary btn-block" id="g-save" style="margin-top:16px;">${existing?"Save changes":"Create goal"}</button>
   `);
+  let chosenIcon = g.icon || "🎯";
   document.getElementById("modal-close").onclick = closeModal;
+  document.querySelectorAll("[data-g-icon]").forEach(el => el.onclick = () => {
+    chosenIcon = el.dataset.gIcon;
+    document.querySelectorAll("[data-g-icon]").forEach(x => x.classList.toggle("selected", x.dataset.gIcon === chosenIcon));
+  });
   document.getElementById("g-save").onclick = () => {
     const title = document.getElementById("g-title").value.trim();
     const target = parseFloat(document.getElementById("g-target").value);
@@ -775,15 +928,68 @@ function goalFormModal(existing) {
     if (!title || !target || target <= 0) { toast("Add a title and target amount"); return; }
     const p = state.profile;
     if (existing) {
-      Object.assign(existing, { title, target, current, targetDate });
+      Object.assign(existing, { title, target, current, targetDate, icon: chosenIcon });
       if (existing.current >= existing.target) existing.status = "completed";
     } else {
-      const goal = { id: uid("goal"), title, target, current, targetDate, status: current >= target ? "completed" : "active", createdDate: todayStr() };
+      const goal = { id: uid("goal"), title, target, current, targetDate, icon: chosenIcon, status: current >= target ? "completed" : "active", createdDate: todayStr(), milestonesHit: [] };
       p.goals.push(goal);
       addXp(5, "New goal");
     }
     saveActive();
     checkNewBadges();
+    closeModal();
+    render();
+  };
+}
+
+function renderWishlist() {
+  const p = state.profile;
+  const items = [...p.wishlist].sort((a,b) => b.addedDate.localeCompare(a.addedDate));
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Wishlist</h2></div>
+    <p style="color:var(--ink-soft);font-size:.85rem;margin-top:0;">Add things you want but haven't committed to buying yet — a 30-day cooldown helps tell a real want from an impulse.</p>
+    <button class="btn btn-coral btn-block" id="new-wish-btn" style="margin-bottom:14px;">+ Add to wishlist</button>
+    <div class="card">
+      ${items.length ? items.map(wishRowHtml).join("") : `<div class="empty-state"><span class="emoji">💭</span>Nothing here yet.</div>`}
+    </div>
+    <button class="btn btn-outline btn-block" data-nav="goals" style="margin-top:10px;">← Back to Goals</button>
+  `, "goals");
+}
+
+function wishRowHtml(w) {
+  const added = new Date(w.addedDate + "T00:00:00");
+  const daysWaited = Math.floor((new Date() - added) / 86400000);
+  const ready = daysWaited >= 30;
+  return `
+    <div class="wish-row">
+      <div class="meta">
+        <div class="t">${escapeHtml(w.title)} · ${money(w.price)}</div>
+        <div class="d">Priority: ${w.priority} · Added ${fmtDate(w.addedDate)}</div>
+      </div>
+      <span class="cooldown ${ready?'ready':''}">${ready ? "Ready!" : `${30-daysWaited}d left`}</span>
+      <button class="del" data-wish-delete="${w.id}" aria-label="Remove">🗑</button>
+    </div>`;
+}
+
+function wishFormModal() {
+  openModal(`
+    <div class="modal-head"><h3>Add to wishlist</h3><button class="close-x" id="modal-close">✕</button></div>
+    <label for="w-title">Item</label>
+    <input type="text" id="w-title" maxlength="40" placeholder="e.g. New headphones" />
+    <label for="w-price">Price</label>
+    <input type="number" id="w-price" min="0" step="0.01" />
+    <label for="w-priority">Priority</label>
+    <select id="w-priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select>
+    <button class="btn btn-primary btn-block" id="w-save" style="margin-top:14px;">Add</button>
+  `);
+  document.getElementById("modal-close").onclick = closeModal;
+  document.getElementById("w-save").onclick = () => {
+    const title = document.getElementById("w-title").value.trim();
+    const price = parseFloat(document.getElementById("w-price").value) || 0;
+    const priority = document.getElementById("w-priority").value;
+    if (!title) { toast("Enter an item name"); return; }
+    state.profile.wishlist.push({ id: uid("wish"), title, price, priority, addedDate: todayStr() });
+    saveActive();
     closeModal();
     render();
   };
@@ -801,8 +1007,18 @@ function addMoneyModal(goal) {
     const amt = parseFloat(document.getElementById("add-amt").value);
     if (!amt || amt <= 0) { toast("Enter an amount"); return; }
     goal.current += amt;
+    if (!goal.milestonesHit) goal.milestonesHit = [];
     const justCompleted = goal.current >= goal.target && goal.status !== "completed";
     if (justCompleted) { goal.status = "completed"; addXp(50, `"${goal.title}" complete!`); }
+    else {
+      const pct = goal.target > 0 ? (goal.current / goal.target) * 100 : 0;
+      [25, 50, 75].forEach(m => {
+        if (pct >= m && goal.milestonesHit.indexOf(m) === -1) {
+          goal.milestonesHit.push(m);
+          addXp(10, `${m}% of "${goal.title}"`);
+        }
+      });
+    }
     saveActive();
     checkNewBadges();
     closeModal();
@@ -851,6 +1067,109 @@ function updatePlannerDisplay() {
     msgEl.className = `health-msg ${total===100?'good':total>100?'bad':'warn'}`;
     msgEl.textContent = total === 100 ? "Perfectly allocated — 100%. 🌟" : total > 100 ? `Over by ${total-100}% — nudge a slider down.` : `${100-total}% left to allocate.`;
   }
+}
+
+function renderSubscriptions() {
+  const p = state.profile;
+  const subs = p.subscriptions || [];
+  const monthlyTotal = subs.reduce((s,x) => s + (x.cycle === "yearly" ? x.cost/12 : x.cost), 0);
+  const today = new Date();
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Subscriptions</h2></div>
+    <div class="card" style="text-align:center;">
+      <div style="font-size:1.6rem;font-family:var(--font-display);">${money(monthlyTotal)}<span style="font-size:.8rem;color:var(--ink-faint);"> /month total</span></div>
+    </div>
+    <button class="btn btn-coral btn-block" id="new-sub-btn" style="margin:10px 0 14px;">+ Add a subscription</button>
+    <div class="card">
+      ${subs.length ? subs.map(s => subRowHtml(s, today)).join("") : `<div class="empty-state"><span class="emoji">📱</span>No subscriptions tracked yet.</div>`}
+    </div>
+    <button class="btn btn-outline btn-block" data-nav="budget" style="margin-top:10px;">← Back to Budget</button>
+  `, "budget");
+}
+
+function subRowHtml(s, today) {
+  const dueSoon = s.renewalDay && Math.abs(s.renewalDay - today.getDate()) <= 3;
+  return `
+    <div class="sub-row">
+      <div class="meta">
+        <div class="t">${escapeHtml(s.name)}</div>
+        <div class="d">${s.cycle === "yearly" ? "Yearly" : "Monthly"}${s.renewalDay ? ` · renews on the ${s.renewalDay}${dueSoon ? ' <span style="color:var(--danger);font-weight:700;">· due soon</span>' : ''}` : ""}</div>
+      </div>
+      <div class="cost">${money(s.cost)}</div>
+      <button class="del" data-sub-delete="${s.id}" aria-label="Remove">🗑</button>
+    </div>`;
+}
+
+function subFormModal() {
+  openModal(`
+    <div class="modal-head"><h3>Add a subscription</h3><button class="close-x" id="modal-close">✕</button></div>
+    <label for="s-name">Name</label>
+    <input type="text" id="s-name" maxlength="30" placeholder="e.g. Netflix" />
+    <div class="field-row">
+      <div><label for="s-cost">Cost</label><input type="number" id="s-cost" min="0" step="0.01" /></div>
+      <div><label for="s-cycle">Billed</label>
+        <select id="s-cycle"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+      </div>
+    </div>
+    <label for="s-day">Renewal day of month (optional)</label>
+    <input type="number" id="s-day" min="1" max="31" placeholder="e.g. 15" />
+    <button class="btn btn-primary btn-block" id="s-save" style="margin-top:14px;">Add</button>
+  `);
+  document.getElementById("modal-close").onclick = closeModal;
+  document.getElementById("s-save").onclick = () => {
+    const name = document.getElementById("s-name").value.trim();
+    const cost = parseFloat(document.getElementById("s-cost").value);
+    const cycle = document.getElementById("s-cycle").value;
+    const renewalDay = parseInt(document.getElementById("s-day").value, 10) || null;
+    if (!name || !cost || cost <= 0) { toast("Enter a name and cost"); return; }
+    state.profile.subscriptions.push({ id: uid("sub"), name, cost, cycle, renewalDay });
+    saveActive();
+    closeModal();
+    render();
+  };
+}
+
+function renderCalculators() {
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Calculators</h2></div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">🎯 Savings Goal Calculator</h3>
+      <label for="calc-goal-amount">How much do you need?</label>
+      <input type="number" id="calc-goal-amount" min="0" step="0.01" placeholder="200" />
+      <label for="calc-goal-days">In how many days?</label>
+      <input type="number" id="calc-goal-days" min="1" placeholder="60" />
+      <button class="btn btn-primary btn-block" id="calc-goal-btn" style="margin-top:10px;">Calculate</button>
+      <div id="calc-goal-result"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">🌳 Compound Growth Calculator</h3>
+      <label for="calc-ci-principal">Starting amount</label>
+      <input type="number" id="calc-ci-principal" min="0" step="0.01" placeholder="100" />
+      <div class="field-row">
+        <div><label for="calc-ci-rate">Annual growth rate (%)</label><input type="number" id="calc-ci-rate" min="0" step="0.1" placeholder="5" /></div>
+        <div><label for="calc-ci-years">Years</label><input type="number" id="calc-ci-years" min="1" placeholder="10" /></div>
+      </div>
+      <button class="btn btn-primary btn-block" id="calc-ci-btn" style="margin-top:10px;">Calculate</button>
+      <div id="calc-ci-result"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">🇦🇺 GST Calculator</h3>
+      <label for="calc-gst-amount">Price</label>
+      <input type="number" id="calc-gst-amount" min="0" step="0.01" placeholder="110" />
+      <label>Direction</label>
+      <div class="tab-row">
+        <button type="button" data-gst-dir="add" class="active">Add 10% GST</button>
+        <button type="button" data-gst-dir="remove">Remove 10% GST</button>
+      </div>
+      <button class="btn btn-primary btn-block" id="calc-gst-btn" style="margin-top:10px;">Calculate</button>
+      <div id="calc-gst-result"></div>
+    </div>
+
+    <button class="btn btn-outline btn-block" data-nav="budget" style="margin-top:6px;">← Back to Budget</button>
+  `, "budget");
 }
 
 function renderPlanner() {
@@ -907,11 +1226,32 @@ function renderPlanner() {
   `, "budget");
 }
 
+function spendingInsights(p) {
+  const expenses = p.budget.filter(e => e.type === "expense");
+  if (!expenses.length) return null;
+  const largest = [...expenses].sort((a,b) => b.amount - a.amount)[0];
+  const totalSpent = expenses.reduce((s,e) => s+e.amount, 0);
+  const avg = totalSpent / expenses.length;
+  const byMonth = {};
+  p.budget.forEach(e => {
+    const m = e.date.slice(0,7);
+    if (!byMonth[m]) byMonth[m] = { income: 0, expense: 0 };
+    byMonth[m][e.type] += e.amount;
+  });
+  let bestMonth = null, bestSaved = -Infinity;
+  Object.entries(byMonth).forEach(([m, v]) => {
+    const saved = v.income - v.expense;
+    if (saved > bestSaved) { bestSaved = saved; bestMonth = m; }
+  });
+  return { largest, avg, bestMonth, bestSaved };
+}
+
 function renderBudget() {
   const p = state.profile;
   const { income, expense, entries } = budgetTotals(p, state.budgetRange);
   const filtered = state.budgetTab === "all" ? entries : entries.filter(e => e.type === state.budgetTab);
   const sorted = [...filtered].sort((a,b) => b.date.localeCompare(a.date));
+  const insights = spendingInsights(p);
 
   // 7-day expense-by-category chart
   const byCat = {};
@@ -922,7 +1262,11 @@ function renderBudget() {
   return shell(`
     <div class="section-head" style="margin-top:0;"><h2>Budget</h2></div>
     <button class="btn btn-coral btn-block" id="new-txn-btn" style="margin-bottom:10px;">+ Log money in or out</button>
-    <button class="btn btn-outline btn-block" data-nav="planner" style="margin-bottom:12px;">🧮 Open Budget Planner</button>
+    <div class="field-row" style="margin-bottom:12px;">
+      <button class="btn btn-outline" data-nav="planner">📝 Planner</button>
+      <button class="btn btn-outline" data-nav="calculators">🧮 Calculators</button>
+      <button class="btn btn-outline" data-nav="subscriptions">📱 Subs</button>
+    </div>
 
     <div class="card">
       <div class="tab-row">
@@ -944,6 +1288,16 @@ function renderBudget() {
             </div>`).join("")}
         </div>` : ""}
     </div>
+
+    ${insights ? `
+    <div class="card">
+      <label>Spending insights</label>
+      <p style="margin:6px 0 0;font-size:.85rem;">
+        Biggest single expense: <strong>${escapeHtml(catInfo("expense", insights.largest.category).label)}</strong> (${money(insights.largest.amount)})<br>
+        Average expense: <strong>${money(insights.avg)}</strong><br>
+        ${insights.bestMonth ? `Best month saved: <strong>${money(Math.max(0,insights.bestSaved))}</strong> (${insights.bestMonth})` : ""}
+      </p>
+    </div>` : ""}
 
     <div class="tab-row">
       <button data-txntab="all" class="${state.budgetTab==='all'?'active':''}">All</button>
@@ -1260,6 +1614,8 @@ async function loadChores() {
     state.choresData = res;
     p.stars = res.stars || 0;
     SavvioStorage.saveProfile(p);
+  } else if (res && res.notApproved) {
+    state.choresData = { tasks: [], history: [], error: "A parent needs to approve your profile before chores unlock. Ask them to check the Manage tab or the Admin portal." };
   } else {
     state.choresData = { tasks: [], history: [], error: (res && res.error) || "Couldn't load chores right now." };
   }
@@ -1270,6 +1626,7 @@ async function markTaskDone(taskId) {
   const p = state.profile;
   const res = await SavvioCloud.completeTask(p.id, p.sessionToken, taskId);
   if (res && res.ok) { toast("Submitted! Waiting for a parent to approve. 🌟"); state.choresData = null; go("chores"); }
+  else if (res && res.notApproved) toast("Ask a parent to approve your profile first");
   else toast((res && res.error) || "Couldn't submit that chore");
 }
 
@@ -1282,6 +1639,8 @@ async function loadPerks() {
     state.perksData = res;
     p.stars = res.stars || 0;
     SavvioStorage.saveProfile(p);
+  } else if (res && res.notApproved) {
+    state.perksData = { perks: [], history: [], error: "A parent needs to approve your profile before rewards unlock. Ask them to check the Manage tab or the Admin portal." };
   } else {
     state.perksData = { perks: [], history: [], error: (res && res.error) || "Couldn't load rewards right now." };
   }
@@ -1297,6 +1656,8 @@ async function redeemPerkFlow(perkId) {
     toast("Requested! Waiting for a parent to hand it over. 🎁");
     state.perksData = null;
     go("perks");
+  } else if (res && res.notApproved) {
+    toast("Ask a parent to approve your profile first");
   } else {
     toast((res && res.error) || "Couldn't redeem that reward");
   }
@@ -1307,6 +1668,138 @@ async function redeemPerkFlow(perkId) {
 // reward catalog + fulfilment. Lock/unlock/reset PIN/delete stay
 // Admin-portal-only; see Code.gs requireActiveParent for why.
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Play hub — Challenges + Quick Games (Needs vs Wants, Scam Spotter)
+// ---------------------------------------------------------------
+function renderPlay() {
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Play &amp; Challenges</h2></div>
+    <div class="tab-row">
+      <button data-playtab="challenges" class="${state.playTab==='challenges'?'active':''}">Challenges</button>
+      <button data-playtab="games" class="${state.playTab==='games'?'active':''}">Quick Games</button>
+    </div>
+    ${state.playTab === "challenges" ? renderChallengesTab() : renderGamesTab()}
+  `, "play");
+}
+
+function renderChallengesTab() {
+  const p = state.profile;
+  return CHALLENGES.map(c => {
+    const prog = p.challengeProgress[c.id] || { count: 0, completed: false };
+    const pct = c.target > 0 ? Math.min(100, Math.round((prog.count / c.target) * 100)) : 0;
+    return `
+      <div class="card challenge-card">
+        <div class="top-row">
+          <div>
+            <div class="ic">${c.icon}</div>
+            <h3 style="margin:4px 0 2px;">${escapeHtml(c.title)}</h3>
+            <p style="margin:0;font-size:.82rem;color:var(--ink-soft);">${escapeHtml(c.description)}</p>
+          </div>
+          <span class="xp-tag">+${c.xp} XP</span>
+        </div>
+        ${prog.completed ? `<div class="badge-pill" style="margin-top:10px;">Completed 🎉</div>` : `
+          <div class="progress-track" style="margin-top:10px;"><div class="progress-fill gold" style="width:${pct}%;"></div></div>
+          <div class="pct">${prog.count}/${c.target}${c.type==='target' ? ' saved' : ''}</div>
+          <button class="btn btn-primary btn-sm" data-challenge-progress="${c.id}" style="margin-top:8px;">${c.type==='once' ? 'Mark done' : '+1 today'}</button>
+        `}
+      </div>`;
+  }).join("");
+}
+
+function renderGamesTab() {
+  if (state.gameSession) return renderGamePlay();
+  const p = state.profile;
+  return `
+    <div class="game-mode-pick">
+      <div class="card" data-start-game="needswants"><div class="ic">⚖️</div><h3 style="margin:6px 0 2px;">Needs vs Wants</h3><p style="font-size:.8rem;color:var(--ink-soft);margin:0;">Quick-fire sorting</p></div>
+      <div class="card" data-start-game="scams"><div class="ic">🛡️</div><h3 style="margin:6px 0 2px;">Scam Spotter</h3><p style="font-size:.8rem;color:var(--ink-soft);margin:0;">Scam or legit?</p></div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <p style="margin:0;font-size:.85rem;color:var(--ink-soft);">
+        Needs vs Wants: ${p.gameStats.needswants.correct}/${p.gameStats.needswants.played} correct all-time<br>
+        Scam Spotter: ${p.gameStats.scams.correct}/${p.gameStats.scams.played} correct all-time
+      </p>
+    </div>
+  `;
+}
+
+function renderGamePlay() {
+  const s = state.gameSession;
+  const item = s.items[s.idx];
+  const isNW = s.type === "needswants";
+  const opt1 = isNW ? "need" : "legit";
+  const opt2 = isNW ? "want" : "scam";
+  const label1 = isNW ? "Need" : "✅ Legit";
+  const label2 = isNW ? "Want" : "⚠️ Scam";
+  return `
+    <div class="game-score">Question ${s.idx+1} of ${s.items.length} · Score ${s.correct}</div>
+    <div class="card game-card">
+      <div class="game-emoji">${item.emoji}</div>
+      <div class="game-label">${escapeHtml(item.label)}</div>
+      <div class="game-choices">
+        <button data-game-choice="${opt1}" class="${s.answered ? (item.answer===opt1?'correct':(s.chosen===opt1?'wrong':'')) : ''}" ${s.answered?'disabled':''}>${label1}</button>
+        <button data-game-choice="${opt2}" class="${s.answered ? (item.answer===opt2?'correct':(s.chosen===opt2?'wrong':'')) : ''}" ${s.answered?'disabled':''}>${label2}</button>
+      </div>
+      ${s.answered ? `<div class="game-explain">${escapeHtml(item.explain)}</div>
+        <button class="btn btn-primary btn-block" id="game-next-btn" style="margin-top:14px;">${s.idx+1 < s.items.length ? 'Next' : 'See results'}</button>` : ""}
+    </div>
+    <button class="btn btn-outline btn-block" id="game-quit-btn" style="margin-top:10px;">Quit</button>
+  `;
+}
+
+function progressChallenge(challengeId) {
+  const c = CHALLENGES.find(x => x.id === challengeId);
+  if (!c) return;
+  const p = state.profile;
+  if (!p.challengeProgress[challengeId]) p.challengeProgress[challengeId] = { count: 0, completed: false };
+  const prog = p.challengeProgress[challengeId];
+  if (prog.completed) return;
+  prog.count += 1;
+  if (prog.count >= c.target) {
+    prog.completed = true;
+    addXp(c.xp, `Challenge: ${c.title}`);
+    checkNewBadges();
+    toast(`🎉 Challenge complete: ${c.title}!`);
+  } else {
+    toast(`Nice! ${prog.count}/${c.target}`);
+  }
+  saveActive();
+  render();
+}
+
+function startGame(type) {
+  const pool = type === "needswants" ? NEEDSWANTS_ITEMS : SCAM_SCENARIOS;
+  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, 8);
+  state.gameSession = { type, items: shuffled, idx: 0, correct: 0, answered: false, chosen: null };
+  render();
+}
+
+function answerGame(choice) {
+  const s = state.gameSession;
+  const item = s.items[s.idx];
+  s.answered = true;
+  s.chosen = choice;
+  const p = state.profile;
+  const statKey = s.type === "needswants" ? "needswants" : "scams";
+  p.gameStats[statKey].played += 1;
+  if (choice === item.answer) { s.correct += 1; p.gameStats[statKey].correct += 1; addXp(5, "Correct!"); }
+  saveActive();
+  render();
+}
+
+function nextGameQuestion() {
+  const s = state.gameSession;
+  s.idx += 1;
+  if (s.idx >= s.items.length) {
+    toast(`Game over! ${s.correct}/${s.items.length} correct 🎮`);
+    checkNewBadges();
+    state.gameSession = null;
+  } else {
+    s.answered = false; s.chosen = null;
+  }
+  render();
+}
+
 function renderManage() {
   if (!SavvioCloud.isConfigured()) {
     return shell(`
@@ -1328,11 +1821,20 @@ function renderManage() {
 function renderManageKids() {
   if (!state.manageKids) { loadManageKids(); return `<div class="card" style="text-align:center;">Loading your kids…</div>`; }
   const { kids, error } = state.manageKids;
+  const active = (kids || []).filter(k => k.status === "active");
+  const ranked = [...active].sort((a,b) => b.xp - a.xp);
+  const medalFor = (userId) => {
+    const rank = ranked.findIndex(k => k.userId === userId);
+    return rank === 0 ? "🥇" : rank === 1 ? "🥈" : rank === 2 ? "🥉" : "";
+  };
   return `
+    <button class="btn btn-primary btn-block" id="add-kid-btn">+ Add a kid profile</button>
+    <p style="font-size:.78rem;color:var(--ink-faint);text-align:center;margin:6px 0 16px;">Fastest way to set them up — they're active right away, no approval step needed. If they've already created their own profile on their own device, approve or reject it below instead.</p>
     ${error ? `<div class="card empty-state">${escapeHtml(error)}</div>` : ""}
     ${kids && kids.length ? kids.map(k => `
       <div class="card">
         <div style="display:flex;align-items:center;gap:10px;">
+          <div class="kid-rank">${medalFor(k.userId)}</div>
           <div style="width:40px;height:40px;border-radius:50%;background:var(--primary-tint);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0;">${k.avatar}</div>
           <div style="flex:1;">
             <div style="font-weight:700;">${escapeHtml(k.name)}</div>
@@ -1344,9 +1846,12 @@ function renderManageKids() {
         <div style="display:flex;gap:8px;margin-top:12px;">
           <button class="btn btn-primary btn-sm" data-kid-approve="${k.userId}">Approve</button>
           <button class="btn btn-outline btn-sm" data-kid-reject="${k.userId}">Reject</button>
-        </div>` : ""}
+        </div>` : `
+        <div style="margin-top:12px;">
+          <button class="btn btn-outline btn-sm" data-kid-gift="${k.userId}" data-kid-name="${escapeHtml(k.name)}">🎁 Gift stars</button>
+        </div>`}
       </div>
-    `).join("") : `<div class="card empty-state"><span class="emoji">👪</span>No kid profiles yet — once one signs up here, they'll show up for approval.</div>`}
+    `).join("") : `<div class="card empty-state"><span class="emoji">👪</span>No kid profiles yet — add one above, or wait for one to sign up on their own device.</div>`}
     <p style="font-size:.76rem;color:var(--ink-faint);text-align:center;padding:0 10px;">Need to lock, unlock, reset a PIN, or delete a profile? That stays in the Admin portal for extra security.</p>
   `;
 }
@@ -1447,6 +1952,54 @@ function renderManagePerks() {
   `;
 }
 
+function addKidModal() {
+  openModal(`
+    <div class="modal-head"><h3>Add a kid profile</h3><button class="close-x" id="modal-close">✕</button></div>
+    <label for="ak-name">Name</label>
+    <input type="text" id="ak-name" maxlength="20" placeholder="e.g. Adarsh" />
+    <label>Age group</label>
+    <div class="age-toggle" id="ak-age-toggle">
+      <button type="button" data-ak-age="kids" class="selected">🧒<br>8–12</button>
+      <button type="button" data-ak-age="teens">🧑<br>13–18</button>
+    </div>
+    <label style="margin-top:14px;">Avatar</label>
+    <div class="avatar-grid" id="ak-avatar-grid">
+      ${AVATARS.map((a,i) => `<button type="button" class="avatar-choice ${i===0?'selected':''}" data-ak-avatar="${a}">${a}</button>`).join("")}
+    </div>
+    <label for="ak-pin" style="margin-top:14px;">4-digit PIN</label>
+    <input type="text" id="ak-pin" inputmode="numeric" maxlength="4" placeholder="••••" />
+    <p style="font-size:.78rem;color:var(--ink-faint);margin:4px 0 0;">They'll use their name + this PIN to log in on any device.</p>
+    <button class="btn btn-primary btn-block" id="ak-save" style="margin-top:14px;">Add profile</button>
+  `);
+  let chosenAge = "kids";
+  let chosenAvatar = AVATARS[0];
+  document.getElementById("modal-close").onclick = closeModal;
+  document.querySelectorAll("[data-ak-age]").forEach(el => el.onclick = () => {
+    chosenAge = el.dataset.akAge;
+    document.querySelectorAll("[data-ak-age]").forEach(x => x.classList.toggle("selected", x.dataset.akAge === chosenAge));
+  });
+  document.querySelectorAll("[data-ak-avatar]").forEach(el => el.onclick = () => {
+    chosenAvatar = el.dataset.akAvatar;
+    document.querySelectorAll("[data-ak-avatar]").forEach(x => x.classList.toggle("selected", x.dataset.akAvatar === chosenAvatar));
+  });
+  document.getElementById("ak-save").onclick = async () => {
+    const name = document.getElementById("ak-name").value.trim();
+    const pin = document.getElementById("ak-pin").value.trim();
+    if (!name) { toast("Enter a name"); return; }
+    if (!/^\d{4}$/.test(pin)) { toast("PIN must be 4 digits"); return; }
+    const p = state.profile;
+    const res = await SavvioCloud.parentCreateKid(p.id, p.sessionToken, name, chosenAge, chosenAvatar, pin);
+    if (res && res.ok) {
+      toast(`${name}'s profile is ready! 🎉`);
+      closeModal();
+      state.manageKids = null;
+      loadManageKids();
+    } else {
+      toast((res && res.error) || "Couldn't add that profile");
+    }
+  };
+}
+
 async function loadManageKids() {
   const p = state.profile;
   const res = await SavvioCloud.listMyKids(p.id, p.sessionToken);
@@ -1501,22 +2054,35 @@ async function reviewManageRedemption(redemptionId, approve) {
 // ---------------------------------------------------------------
 function renderProfile() {
   const p = state.profile;
+  const isParent = p.role === "parent";
   return shell(`
     <div class="profile-hero">
       <div class="av-big">${p.avatar}</div>
       <h2>${escapeHtml(p.name)}</h2>
-      <p style="color:var(--ink-faint);">${p.ageGroup === "kids" ? "Kid mode (8–12)" : "Teen mode (13–18)"}</p>
+      <p style="color:var(--ink-faint);">${isParent ? "👪 Parent/Guardian" : (p.ageGroup === "kids" ? "Kid mode (8–12)" : "Teen mode (13–18)")}</p>
     </div>
     <div class="stat-row">
       <div class="stat-pill"><div class="val">${p.xp}</div><div class="lbl">XP</div></div>
       <div class="stat-pill"><div class="val">${p.lessonsCompleted.length}</div><div class="lbl">Lessons</div></div>
       <div class="stat-pill"><div class="val">${p.goals.filter(g=>g.status==='completed').length}</div><div class="lbl">Goals hit</div></div>
     </div>
+    ${!isParent ? `
     <div class="card">
       <label>Switch age mode</label>
       <div class="age-toggle">
         <button data-profile-age="kids" class="${p.ageGroup==='kids'?'selected':''}">🧒<br>8–12</button>
         <button data-profile-age="teens" class="${p.ageGroup==='teens'?'selected':''}">🧑<br>13–18</button>
+      </div>
+    </div>` : ""}
+    <div class="card">
+      <label>Accessibility</label>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;">
+        <span style="font-size:.9rem;">🌙 Dark mode</span>
+        <button class="btn btn-sm ${p.prefs.darkMode?'btn-primary':'btn-outline'}" id="toggle-dark-btn">${p.prefs.darkMode?'On':'Off'}</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;">
+        <span style="font-size:.9rem;">🔠 Large text</span>
+        <button class="btn btn-sm ${p.prefs.largeText?'btn-primary':'btn-outline'}" id="toggle-large-text-btn">${p.prefs.largeText?'On':'Off'}</button>
       </div>
     </div>
     <button class="btn btn-outline btn-block" id="edit-profile-btn">✏️ Edit name &amp; avatar</button>
@@ -1537,6 +2103,7 @@ function renderProfile() {
 // ---------------------------------------------------------------
 function bindScreenEvents() {
   document.querySelectorAll("[data-nav]").forEach(el => el.onclick = () => go(el.dataset.nav));
+  document.querySelectorAll("[data-habit-toggle]").forEach(el => el.onclick = () => toggleHabit(el.dataset.habitToggle));
 
   const liSubmit = document.getElementById("li-submit");
   if (liSubmit) liSubmit.onclick = () => submitLoginEntry();
@@ -1579,6 +2146,13 @@ function bindScreenEvents() {
   // Goals
   const newGoalBtn = document.getElementById("new-goal-btn");
   if (newGoalBtn) newGoalBtn.onclick = () => goalFormModal(null);
+  const emergencyFundBtn = document.getElementById("emergency-fund-btn");
+  if (emergencyFundBtn) emergencyFundBtn.onclick = () => {
+    const p = state.profile;
+    const { expense } = budgetTotals(p, "month");
+    const suggested = Math.max(50, Math.round(expense || 100));
+    goalFormModal(null, { title: "Emergency Fund", target: suggested, current: "0", targetDate: "", icon: "🚨" });
+  };
   document.querySelectorAll("[data-goal-edit]").forEach(el => el.onclick = () => {
     const g = state.profile.goals.find(x => x.id === el.dataset.goalEdit);
     goalFormModal(g);
@@ -1593,6 +2167,60 @@ function bindScreenEvents() {
     saveActive();
     render();
   });
+
+  // Wishlist
+  const newWishBtn = document.getElementById("new-wish-btn");
+  if (newWishBtn) newWishBtn.onclick = () => wishFormModal();
+  document.querySelectorAll("[data-wish-delete]").forEach(el => el.onclick = () => {
+    state.profile.wishlist = state.profile.wishlist.filter(x => x.id !== el.dataset.wishDelete);
+    saveActive();
+    render();
+  });
+
+  // Subscriptions
+  const newSubBtn = document.getElementById("new-sub-btn");
+  if (newSubBtn) newSubBtn.onclick = () => subFormModal();
+  document.querySelectorAll("[data-sub-delete]").forEach(el => el.onclick = () => {
+    state.profile.subscriptions = state.profile.subscriptions.filter(x => x.id !== el.dataset.subDelete);
+    saveActive();
+    render();
+  });
+
+  // Calculators
+  let gstDirection = "add";
+  document.querySelectorAll("[data-gst-dir]").forEach(el => el.onclick = () => {
+    gstDirection = el.dataset.gstDir;
+    document.querySelectorAll("[data-gst-dir]").forEach(x => x.classList.toggle("active", x.dataset.gstDir === gstDirection));
+  });
+  const calcGoalBtn = document.getElementById("calc-goal-btn");
+  if (calcGoalBtn) calcGoalBtn.onclick = () => {
+    const amt = parseFloat(document.getElementById("calc-goal-amount").value) || 0;
+    const days = parseFloat(document.getElementById("calc-goal-days").value) || 0;
+    const resultEl = document.getElementById("calc-goal-result");
+    if (amt <= 0 || days <= 0) { resultEl.innerHTML = ""; toast("Enter both fields"); return; }
+    const perDay = amt / days;
+    resultEl.innerHTML = `<div class="calc-result"><div class="big">${money(perDay)}/day</div><div class="lbl">or ${money(perDay*7)}/week · ${money(perDay*30.44)}/month</div></div>`;
+  };
+  const calcCiBtn = document.getElementById("calc-ci-btn");
+  if (calcCiBtn) calcCiBtn.onclick = () => {
+    const principal = parseFloat(document.getElementById("calc-ci-principal").value) || 0;
+    const rate = parseFloat(document.getElementById("calc-ci-rate").value) || 0;
+    const years = parseFloat(document.getElementById("calc-ci-years").value) || 0;
+    const resultEl = document.getElementById("calc-ci-result");
+    if (principal <= 0 || years <= 0) { resultEl.innerHTML = ""; toast("Enter a starting amount and years"); return; }
+    const future = principal * Math.pow(1 + rate/100, years);
+    resultEl.innerHTML = `<div class="calc-result"><div class="big">${money(future)}</div><div class="lbl">after ${years} years (+${money(future-principal)} growth)</div></div>`;
+  };
+  const calcGstBtn = document.getElementById("calc-gst-btn");
+  if (calcGstBtn) calcGstBtn.onclick = () => {
+    const amt = parseFloat(document.getElementById("calc-gst-amount").value) || 0;
+    const resultEl = document.getElementById("calc-gst-result");
+    if (amt <= 0) { resultEl.innerHTML = ""; toast("Enter a price"); return; }
+    let result, label;
+    if (gstDirection === "add") { result = amt * 1.1; label = `Price including GST (GST portion: ${money(amt*0.1)})`; }
+    else { result = amt / 1.1; label = `Price excluding GST (GST portion: ${money(amt - amt/1.1)})`; }
+    resultEl.innerHTML = `<div class="calc-result"><div class="big">${money(result)}</div><div class="lbl">${label}</div></div>`;
+  };
 
   // Budget Planner
   const planIncome = document.getElementById("plan-income");
@@ -1673,6 +2301,20 @@ function bindScreenEvents() {
   if (rejectedSwitchBtn) rejectedSwitchBtn.onclick = () => { state.profile = null; go("splash"); };
 
   // Rewards / profile
+  const toggleDarkBtn = document.getElementById("toggle-dark-btn");
+  if (toggleDarkBtn) toggleDarkBtn.onclick = () => {
+    state.profile.prefs.darkMode = !state.profile.prefs.darkMode;
+    applyPrefs(state.profile);
+    saveActive();
+    render();
+  };
+  const toggleLargeTextBtn = document.getElementById("toggle-large-text-btn");
+  if (toggleLargeTextBtn) toggleLargeTextBtn.onclick = () => {
+    state.profile.prefs.largeText = !state.profile.prefs.largeText;
+    applyPrefs(state.profile);
+    saveActive();
+    render();
+  };
   const openChoresBtn = document.getElementById("open-chores-btn");
   if (openChoresBtn) openChoresBtn.onclick = () => { state.choresData = null; go("chores"); };
   const openPerksBtn = document.getElementById("open-perks-btn");
@@ -1680,7 +2322,19 @@ function bindScreenEvents() {
   document.querySelectorAll("[data-task-done]").forEach(el => el.onclick = () => markTaskDone(el.dataset.taskDone));
   document.querySelectorAll("[data-perk-redeem]").forEach(el => el.onclick = () => redeemPerkFlow(el.dataset.perkRedeem));
 
+  // Play hub
+  document.querySelectorAll("[data-playtab]").forEach(el => el.onclick = () => { state.playTab = el.dataset.playtab; render(); });
+  document.querySelectorAll("[data-challenge-progress]").forEach(el => el.onclick = () => progressChallenge(el.dataset.challengeProgress));
+  document.querySelectorAll("[data-start-game]").forEach(el => el.onclick = () => startGame(el.dataset.startGame));
+  document.querySelectorAll("[data-game-choice]").forEach(el => el.onclick = () => answerGame(el.dataset.gameChoice));
+  const gameNextBtn = document.getElementById("game-next-btn");
+  if (gameNextBtn) gameNextBtn.onclick = () => nextGameQuestion();
+  const gameQuitBtn = document.getElementById("game-quit-btn");
+  if (gameQuitBtn) gameQuitBtn.onclick = () => { state.gameSession = null; render(); };
+
   // Manage Family (parent role)
+  const addKidBtn = document.getElementById("add-kid-btn");
+  if (addKidBtn) addKidBtn.onclick = () => addKidModal();
   document.querySelectorAll("[data-managetab]").forEach(el => el.onclick = () => {
     state.manageTab = el.dataset.managetab;
     if (state.manageTab === "kids" && !state.manageKids) loadManageKids();
@@ -1698,6 +2352,15 @@ function bindScreenEvents() {
     const p = state.profile;
     const res = await SavvioCloud.parentRejectKid(p.id, p.sessionToken, el.dataset.kidReject);
     if (res && res.ok) { toast("Rejected"); state.manageKids = null; loadManageKids(); } else toast((res && res.error) || "Couldn't reject");
+  });
+  document.querySelectorAll("[data-kid-gift]").forEach(el => el.onclick = async () => {
+    const amountStr = prompt(`Gift how many stars to ${el.dataset.kidName}?`, "10");
+    if (amountStr === null) return;
+    const amount = parseInt(amountStr, 10);
+    if (!amount || amount <= 0) { toast("Enter a positive number"); return; }
+    const p = state.profile;
+    const res = await SavvioCloud.parentAdjustStars(p.id, p.sessionToken, el.dataset.kidGift, amount);
+    if (res && res.ok) { toast(`🎁 Gifted ${amount} stars!`); state.manageKids = null; loadManageKids(); } else toast((res && res.error) || "Couldn't gift stars");
   });
 
   const mtaskCreateBtn = document.getElementById("mtask-create-btn");
@@ -1773,8 +2436,7 @@ function bindScreenEvents() {
 async function unlockProfile(profileId, pin) {
   const p = SavvioStorage.getProfile(profileId);
   if (!p) { toast("Profile not found"); state.pinBuffer = ""; render(); return; }
-  p.badgesEarned = p.badgesEarned || [];
-  p.quizAttempts = p.quizAttempts || [];
+  ensureProfileDefaults(p);
 
   if (SavvioCloud.isConfigured()) {
     const res = await SavvioCloud.loginProfile(profileId, pin);
@@ -1789,6 +2451,7 @@ async function unlockProfile(profileId, pin) {
       p.role = res.profile.role || p.role || "kid";
       p.locked = false;
       state.profile = p;
+      applyPrefs(p);
       SavvioStorage.saveProfile(p);
       SavvioStorage.setActiveProfileId(p.id);
       state.pinBuffer = "";
@@ -1816,6 +2479,7 @@ async function unlockProfile(profileId, pin) {
 
   if (p.pin === pin) {
     state.profile = p;
+    applyPrefs(p);
     SavvioStorage.setActiveProfileId(p.id);
     state.pinBuffer = "";
     touchDailyStreak();
@@ -1879,8 +2543,8 @@ function init() {
   if (activeId) {
     const p = SavvioStorage.getProfile(activeId);
     if (p) {
-      p.badgesEarned = p.badgesEarned || [];
-      p.quizAttempts = p.quizAttempts || [];
+      ensureProfileDefaults(p);
+      applyPrefs(p);
       state.profile = p;
       touchDailyStreak();
       if (p.locked) { go("locked"); }

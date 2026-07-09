@@ -18,7 +18,7 @@
    =========================================================== */
 
 const SavvioCloud = (() => {
-  const PROXY_URL = "https://script.google.com/macros/s/AKfycbxt-hHv1K_ijQhCsIuq0NkesAEfgSV9Bvx7ALhDKiPZouRLCrhkREZKB8TX7lHrCDNx/exec"; // <- paste your Apps Script /exec URL here once deployed
+  const PROXY_URL = "https://script.google.com/macros/s/AKfycbz9t_tXzxIV5B_weSOZqGTSbzJHBYct31BJHEPegB0JIOmxbC59UrdetyZTWkXAwg4I/exec"; // <- paste your Apps Script /exec URL here once deployed
   const TIMEOUT_MS = 4000;
 
   function withTimeout(promise, ms) {
@@ -73,8 +73,11 @@ const SavvioCloud = (() => {
 
     // --- Parent (in-app "Manage Family") ---
     listMyKids: (userId, sessionToken) => call("listMyKids", { userId, sessionToken }),
+    parentCreateKid: (userId, sessionToken, name, ageGroup, avatar, pin) =>
+      call("parentCreateKid", { userId, sessionToken, name, ageGroup, avatar, pin }),
     parentApproveKid: (userId, sessionToken, kidId) => call("parentApproveKid", { userId, sessionToken, kidId }),
     parentRejectKid: (userId, sessionToken, kidId) => call("parentRejectKid", { userId, sessionToken, kidId }),
+    parentAdjustStars: (userId, sessionToken, kidId, amount) => call("parentAdjustStars", { userId, sessionToken, kidId, amount }),
 
     parentListTasks: (userId, sessionToken) => call("parentListTasks", { userId, sessionToken }),
     parentCreateTask: (userId, sessionToken, title, starValue, assignedTo, recurring) =>

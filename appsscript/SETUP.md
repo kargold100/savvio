@@ -83,10 +83,18 @@ and redeploy to GitHub Pages as usual.
   — same name and PIN logs straight in and pulls down their goals, budget,
   lessons, and quiz history.
 - **If you approved a parent profile:** log in as them, and the bottom nav
-  shows a **Manage** tab instead of Rewards. From there they can see all
-  kid profiles, approve/reject new kid sign-ups, set up chores and rewards,
-  and approve chore completions or fulfil reward redemptions — all inside
-  the regular app, no separate admin login needed.
+  shows a **Manage** tab instead of Rewards. From there, tap **"+ Add a kid
+  profile"** to set up a kid directly — name, age group, avatar, PIN — and
+  it's active immediately, no separate approval step. That's the
+  recommended way to add a family's kids: cleaner and more "linked" than
+  waiting for each kid to self-register on their own device and then
+  hunting down the approval. (Self-signup still works too — if a kid sets
+  up their own profile first, it'll show up under Manage → Kids as
+  pending, with Approve/Reject buttons.)
+- Chores and rewards only unlock for **active** profiles — a pending or
+  rejected profile sees a friendly "ask a parent to approve you" message
+  instead of the chore list. That's deliberate: approval should actually
+  mean something.
 - **If you approved a kid profile:** in the app, they'll see chores under
   Rewards → View Chores, tap "Mark done", and it'll show up in a parent's
   Manage tab (or the Admin portal's Chores tab) as pending — approve it and
@@ -113,6 +121,12 @@ and redeploy to GitHub Pages as usual.
   stars by itself — a parent or admin approving it does. Redeeming a reward
   deducts stars immediately (so a kid can't request the same reward twice
   with money they don't have) and refunds automatically if rejected.
+- The app is a full installable PWA now (`manifest.json` + `service-worker.js`
+  + `assets/icons/`). On Android, "Add to Home Screen" gives a real app
+  icon with no browser chrome. To go further and package it as an actual
+  Android app (for sideloading, a small private distribution, or the Play
+  Store), feed the deployed URL into pwabuilder.com — it reads the
+  manifest automatically and generates a signed Android package.
 - **Parent vs Admin — why both exist:** a parent profile is secured the
   same way as a kid's — a 4-digit PIN. That's fine for day-to-day things
   (chores, rewards, approving a new kid), but too weak to gate account

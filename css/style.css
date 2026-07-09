@@ -440,3 +440,93 @@ input:focus, select:focus, textarea:focus{ border-color: var(--primary); }
   body{ background-color: var(--bg); }
   #app{ box-shadow: 0 0 60px rgba(0,0,0,.06); }
 }
+
+/* ===========================================================
+   Accessibility: Dark mode + Large text
+   =========================================================== */
+body.dark{
+  --bg: #12201A;
+  --surface: #1A2E24;
+  --surface-2: #20382C;
+  --ink: #EAF3ED;
+  --ink-soft: #B7CBBE;
+  --ink-faint: #7E9689;
+  --primary-tint: #1F4531;
+  --border: #2A4636;
+  --shadow: rgba(0,0,0,0.35);
+  --shadow-soft: rgba(0,0,0,0.25);
+  --sky-tint: #16303D;
+}
+body.dark{ background-image: none; }
+body.large-text{ font-size: 18px; }
+body.large-text .btn{ font-size: 1.08rem; }
+body.large-text h1{ font-size: 2.4rem; }
+
+/* ===========================================================
+   Money Coach & Habit Tracker (Dashboard)
+   =========================================================== */
+.coach-card{ background: linear-gradient(160deg, #E9F6FB, var(--surface)); border:1px dashed var(--sky); }
+.habit-list{ display:flex; flex-direction:column; gap:8px; }
+.habit-row{
+  display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius: var(--radius-md);
+  background: var(--surface-2); cursor:pointer; border:2px solid transparent;
+}
+.habit-row.done{ border-color: var(--primary); background: var(--primary-tint); }
+.habit-row .check-circle{
+  width:24px; height:24px; border-radius:50%; border:2px solid var(--primary); flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; font-size:.8rem; color: var(--primary);
+}
+.habit-row.done .check-circle{ background: var(--primary); color:#fff; }
+.habit-row .label{ font-size:.88rem; font-weight:600; }
+
+/* ===========================================================
+   Quick Games (Wants vs Needs / Scam Spotter)
+   =========================================================== */
+.game-card{ text-align:center; }
+.game-emoji{ font-size:3.4rem; margin: 8px 0; }
+.game-label{ font-family: var(--font-display); font-size:1.1rem; margin-bottom: 18px; }
+.game-choices{ display:flex; gap:12px; }
+.game-choices button{ flex:1; padding: 16px 8px; border-radius: var(--radius-md); border:2px solid var(--border); background: var(--surface); font-family: var(--font-display); font-weight:700; font-size:1rem; }
+.game-choices button.correct{ border-color: var(--primary); background: var(--primary-tint); color: var(--primary-dark); }
+.game-choices button.wrong{ border-color: var(--danger); background:#FDE4E4; color: var(--danger); }
+.game-explain{ background: var(--sky-tint); border-radius: var(--radius-md); padding: 12px 14px; font-size:.85rem; margin-top:14px; text-align:left; }
+.game-score{ font-size:.8rem; color: var(--ink-faint); margin-bottom:6px; }
+.game-mode-pick{ display:flex; gap:10px; }
+.game-mode-pick .card{ flex:1; text-align:center; cursor:pointer; }
+.game-mode-pick .card .ic{ font-size:2rem; }
+
+/* ===========================================================
+   Challenges
+   =========================================================== */
+.challenge-card .top-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+.challenge-card .ic{ font-size:1.8rem; }
+.challenge-card .xp-tag{ font-size:.68rem; font-weight:800; color: var(--gold-dark); background:#FFF6DC; padding:2px 9px; border-radius: var(--radius-pill); }
+
+/* ===========================================================
+   Calculators
+   =========================================================== */
+.calc-result{
+  margin-top: 14px; padding: 14px; border-radius: var(--radius-md); background: var(--primary-tint);
+  text-align:center;
+}
+.calc-result .big{ font-family: var(--font-display); font-size:1.5rem; color: var(--primary-dark); }
+.calc-result .lbl{ font-size:.72rem; color: var(--ink-faint); text-transform:uppercase; }
+
+/* ===========================================================
+   Wishlist & Subscriptions
+   =========================================================== */
+.wish-row, .sub-row{
+  display:flex; align-items:center; gap:10px; padding:12px 4px; border-bottom:1px solid var(--border);
+}
+.wish-row:last-child, .sub-row:last-child{ border-bottom:none; }
+.wish-row .meta, .sub-row .meta{ flex:1; }
+.wish-row .meta .t, .sub-row .meta .t{ font-weight:700; font-size:.9rem; }
+.wish-row .meta .d, .sub-row .meta .d{ font-size:.72rem; color: var(--ink-faint); }
+.wish-row .cooldown{ font-size:.68rem; padding:3px 9px; border-radius: var(--radius-pill); background:#FFF1DE; color:#8A5A00; font-weight:700; }
+.wish-row .cooldown.ready{ background: var(--primary-tint); color: var(--primary-dark); }
+.sub-row .cost{ font-weight:700; font-family: var(--font-display); }
+
+/* ===========================================================
+   Manage Kids leaderboard
+   =========================================================== */
+.kid-rank{ font-size:1.1rem; width:26px; text-align:center; flex-shrink:0; }

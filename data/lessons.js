@@ -79,6 +79,39 @@ const LESSONS = [
       { heading: "Ask a trusted adult", body: "Before entering any payment details online, or if something feels off, always check with a parent or trusted adult first." },
       { heading: "Secure sites", body: "Look for a padlock icon in your browser before entering payment information — it's a sign the site is more secure." }
     ]
+  },
+  {
+    id: "l-credit", title: "Credit, Loans & BNPL", category: "credit", icon: "💳",
+    summary: "How borrowing money actually works, and what it costs.",
+    sections: [
+      { heading: "What is credit?", body: "Credit means borrowing money now and agreeing to pay it back later — usually with extra cost added on, called interest." },
+      { heading: "Credit cards", body: "A credit card lets you buy now and pay later. If you pay the full balance every month, it can be free to use. If you don't, interest charges add up fast — often much faster than most savings accounts earn." },
+      { heading: "Loans", body: "A loan is a lump sum you borrow and pay back over time, usually with interest. Bigger loans (like for a car or a home) usually take years to repay." },
+      { heading: "Buy Now, Pay Later (BNPL)", body: "BNPL splits a purchase into smaller payments with no interest — but missed payments often bring fees, and it's still money you don't have yet. Easy approval doesn't mean it's free." },
+      { heading: "Try it", body: "Before borrowing for anything, ask: what's the total cost including interest or fees, and what happens if a payment is late?" }
+    ]
+  },
+  {
+    id: "l-insurance", title: "Insurance Basics", category: "insurance", icon: "🛟",
+    summary: "Paying a little now so a big loss doesn't wreck your finances later.",
+    sections: [
+      { heading: "What is insurance?", body: "Insurance is a deal: you pay a smaller regular amount (a premium), and the insurer covers a much bigger cost if something goes wrong, like an accident, illness, or damaged property." },
+      { heading: "Why it exists", body: "Without insurance, one bad event — a car crash, a hospital visit, a house fire — could undo years of saving. Insurance spreads that risk out." },
+      { heading: "Common types", body: "Health, car, home/contents, and travel insurance are common examples. Different types cover different risks, and you usually only need the ones relevant to what you actually own or do." },
+      { heading: "Try it", body: "Next time you hear about an insurance type, ask: what specific risk is this protecting against, and is that a risk that matters to me right now?" }
+    ]
+  },
+  {
+    id: "l-aussie", title: "Australian Money Basics", category: "aussie", icon: "🇦🇺",
+    summary: "Local money terms every young Australian eventually runs into.",
+    sections: [
+      { heading: "Superannuation (super)", body: "Super is money your employer puts aside for your retirement, on top of your wage. It's invested and grows over decades — even small amounts from a first casual job add up by retirement age." },
+      { heading: "Tax File Number (TFN) & tax basics", body: "A TFN identifies you to the tax system. Without one, more tax gets taken from your pay than necessary. Most people get some of it back at tax time if they've overpaid through the year." },
+      { heading: "GST", body: "GST (Goods and Services Tax) is a 10% tax added to most things you buy in Australia. The price you see on the shelf almost always already includes it." },
+      { heading: "HECS-HELP", body: "HECS-HELP is a loan from the government that covers university course fees. You only start repaying it once your income passes a certain threshold — it comes out of your pay automatically like tax." },
+      { heading: "Youth Allowance & Centrelink", body: "Youth Allowance is government income support some students and young people can apply for. Centrelink is the government service that manages payments like this — worth knowing they exist, even if you don't need them yet." },
+      { heading: "Try it", body: "This is a starting point, not full advice — the details (thresholds, rates, eligibility) change over time, so always check the current rules on the relevant government website when it actually matters to you." }
+    ]
   }
 ];
 

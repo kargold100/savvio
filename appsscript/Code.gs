@@ -89,8 +89,10 @@ function doPost(e) {
       case "redeemPerk":   return jsonOut(redeemPerk(body));
 
       case "listMyKids":       return jsonOut(listMyKids(body));
+      case "parentCreateKid":  return jsonOut(parentCreateKid(body));
       case "parentApproveKid": return jsonOut(parentApproveKid(body));
       case "parentRejectKid":  return jsonOut(parentRejectKid(body));
+      case "parentAdjustStars": return jsonOut(parentAdjustStars(body));
 
       case "parentListTasks":              return jsonOut(parentListTasks(body));
       case "parentCreateTask":             return jsonOut(parentCreateTask(body));
@@ -427,6 +429,7 @@ function listTasks(body) {
   const user = findUser(userId);
   if (!user) return { ok: false, error: "Profile not found" };
   if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
+  if (user.status !== "active") return { ok: false, error: "not_approved", notApproved: true };
 
   const tasks = readRows(tasksSheet(), TASK_HEADERS).filter(t => isTrue(t.active) && visibleTo(t, userId));
   const completions = readRows(completionsSheet(), COMPLETION_HEADERS).filter(c => c.userId === userId);
@@ -456,6 +459,7 @@ function completeTask(body) {
   if (!user) return { ok: false, error: "Profile not found" };
   if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
   if (user.status === "locked") return { ok: false, error: "locked", locked: true };
+  if (user.status !== "active") return { ok: false, error: "not_approved", notApproved: true };
 
   const task = readRows(tasksSheet(), TASK_HEADERS).find(t => t.taskId === taskId);
   if (!task) return { ok: false, error: "Chore not found" };
@@ -480,6 +484,7 @@ function listPerks(body) {
   const user = findUser(userId);
   if (!user) return { ok: false, error: "Profile not found" };
   if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
+  if (user.status !== "active") return { ok: false, error: "not_approved", notApproved: true };
 
   const perks = readRows(perksSheet(), PERK_HEADERS).filter(p => isTrue(p.active) && visibleTo(p, userId));
   const redemptions = readRows(redemptionsSheet(), REDEMPTION_HEADERS).filter(r => r.userId === userId);
@@ -504,6 +509,7 @@ function redeemPerk(body) {
   if (!user) return { ok: false, error: "Profile not found" };
   if (!validSession(user, sessionToken)) return { ok: false, error: "Session expired, please log in again" };
   if (user.status === "locked") return { ok: false, error: "locked", locked: true };
+  if (user.status !== "active") return { ok: false, error: "not_approved", notApproved: true };
 
   const perk = readRows(perksSheet(), PERK_HEADERS).find(p => p.perkId === perkId);
   if (!perk) return { ok: false, error: "Reward not found" };
@@ -656,6 +662,49 @@ function parentRejectKid(body) {
   writeUserRow(kid);
   logAudit("parent:" + parent.name, "rejectKid", kid.userId, "");
   return { ok: true };
+}
+
+// A parent setting up a kid's profile themselves, from inside the app.
+// Since the parent is already authenticated and doing this deliberately,
+// the new profile goes straight to "active" — no separate approval step,
+// which is what felt disconnected about the old flow (a kid signs up on
+// their own device, and a parent has to go find and approve it later).
+// This is the more natural path for most families; self-signup + approve
+// still exists too, for a kid setting up their own device first.
+// A parent gifting stars directly — e.g. a one-off bonus outside the
+// normal chore-approval loop. Amount must be positive; the result is
+// floored at zero so it can never push a balance negative.
+function parentAdjustStars(body) {
+  const parent = requireActiveParent(body);
+  const kid = findUser(body.kidId);
+  if (!kid) return { ok: false, error: "Profile not found" };
+  if ((kid.role || "kid") === "parent") return { ok: false, error: "Can't adjust stars on a parent profile" };
+  const amount = Number(body.amount) || 0;
+  if (amount <= 0) return { ok: false, error: "Amount must be positive" };
+  kid.stars = Math.max(0, (Number(kid.stars) || 0) + amount);
+  writeUserRow(kid);
+  logAudit("parent:" + parent.name, "giftStars", kid.userId, String(amount));
+  return { ok: true, stars: kid.stars };
+}
+
+function parentCreateKid(body) {
+  const parent = requireActiveParent(body);
+  const { name, ageGroup, avatar, pin } = body;
+  if (!name || !pin) return { ok: false, error: "Missing fields" };
+  if (!/^\d{4}$/.test(String(pin))) return { ok: false, error: "PIN must be 4 digits" };
+  if (readRows(usersSheet(), USER_HEADERS).some(u => u.name.trim().toLowerCase() === name.trim().toLowerCase())) {
+    return { ok: false, error: "Someone with that name already exists — try a last initial or nickname" };
+  }
+  const kidId = "kid_" + Utilities.getUuid().replace(/-/g, "").slice(0, 12);
+  const salt = randomSalt();
+  appendUserRow({
+    userId: kidId, name, ageGroup: ageGroup || "kids", role: "kid", avatar: avatar || "🦊",
+    pinHash: hashWithSalt(pin, salt), pinSalt: salt,
+    status: "active", xp: 0, streak: 0, stars: 0, lastActiveDate: "", createdDate: nowIso(),
+    dataJson: "{}", sessionToken: "", sessionExpiry: "", failedAttempts: 0,
+  });
+  logAudit("parent:" + parent.name, "createKid", kidId, name);
+  return { ok: true, kidId };
 }
 
 // ---------------------------------------------------------------

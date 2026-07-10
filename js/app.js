@@ -62,6 +62,8 @@ const BADGES = [
   { id:"challenge_master", name:"Challenge Master", icon:"🏅", check:p => Object.values(p.challengeProgress||{}).filter(c=>c.completed).length >= 5 },
   { id:"needswants_pro", name:"Needs vs Wants Pro", icon:"⚖️", check:p => (p.gameStats && p.gameStats.needswants ? p.gameStats.needswants.correct : 0) >= 20 },
   { id:"scam_spotter", name:"Scam Spotter", icon:"🛡️", check:p => (p.gameStats && p.gameStats.scams ? p.gameStats.scams.correct : 0) >= 15 },
+  { id:"flexi_starter", name:"Piggy Bank Starter", icon:"🐷", check:p => (p.flexiSaves||[]).length >= 1 },
+  { id:"flexi_pro", name:"Piggy Bank Pro", icon:"🏦", check:p => (p.flexiSaves||[]).length >= 15 },
 ];
 
 const DAILY_TIP_POOL = TIPS;
@@ -115,7 +117,8 @@ function fmtDate(d) {
 
 function money(n) {
   const v = Number(n) || 0;
-  return "$" + v.toFixed(v % 1 === 0 ? 0 : 2);
+  const symbol = (state.profile && state.profile.prefs && state.profile.prefs.currency) || "$";
+  return symbol + v.toFixed(v % 1 === 0 ? 0 : 2);
 }
 
 function escapeHtml(s) {
@@ -181,16 +184,19 @@ function ensureProfileDefaults(p) {
   if (!p.wishlist) p.wishlist = [];
   if (!p.subscriptions) p.subscriptions = [];
   if (!p.habitLog) p.habitLog = {};
-  if (!p.prefs) p.prefs = { darkMode: false, largeText: false };
+  if (!p.flexiSaves) p.flexiSaves = [];
+  if (typeof p.email !== "string") p.email = "";
+  if (!p.prefs) p.prefs = { darkMode: false, largeText: false, currency: "$" };
+  if (!p.prefs.currency) p.prefs.currency = "$";
   if (!p.role) p.role = "kid";
   if (typeof p.stars !== "number") p.stars = 0;
   return p;
 }
 
-function newProfile({ name, ageGroup, avatar, pin, role }) {
+function newProfile({ name, ageGroup, avatar, pin, role, email }) {
   return {
     id: uid("kid"),
-    name, ageGroup, avatar, pin, role: role || "kid",
+    name, ageGroup, avatar, pin, role: role || "kid", email: email || "",
     xp: 0, streak: 0, stars: 0, lastActiveDate: null,
     createdDate: todayStr(),
     goals: [], budget: [], lessonsCompleted: [], quizAttempts: [],
@@ -200,7 +206,8 @@ function newProfile({ name, ageGroup, avatar, pin, role }) {
     wishlist: [], // { id, title, price, priority, addedDate }
     subscriptions: [], // { id, name, cost, cycle, renewalDay }
     habitLog: {}, // { "YYYY-MM-DD": { habitId: true } }
-    prefs: { darkMode: false, largeText: false },
+    flexiSaves: [], // { id, amount, date } — the "digital piggy bank", no target
+    prefs: { darkMode: false, largeText: false, currency: "$" },
     // Cloud sync fields (all local-only and harmless until js/cloud.js has a PROXY_URL)
     cloudStatus: "offline", // offline | pending | active | rejected | locked
     sessionToken: null, sessionExpiry: null,
@@ -226,6 +233,7 @@ function scheduleCloudSync() {
       badgesEarned: p.badgesEarned || [], budgetPlan: p.budgetPlan || null,
       challengeProgress: p.challengeProgress || {}, gameStats: p.gameStats || {},
       wishlist: p.wishlist || [], subscriptions: p.subscriptions || [], habitLog: p.habitLog || {},
+      flexiSaves: p.flexiSaves || [],
     };
     const res = await SavvioCloud.syncProfile(p.id, p.sessionToken, p.xp, p.streak, p.lastActiveDate, payload);
     if (res && res.ok) {
@@ -299,7 +307,7 @@ function go(screen, params = {}) {
 }
 
 function render() {
-  const authScreens = ["splash","login-entry","onboard-role","onboard-age","onboard-avatar","pin-login"];
+  const authScreens = ["splash","login-entry","onboard-role","onboard-email","onboard-age","onboard-avatar","pin-login"];
   if (state.screen !== "locked" && state.screen !== "rejected" && !authScreens.includes(state.screen) && !state.profile) { state.screen = "splash"; }
 
   let html = "";
@@ -308,10 +316,12 @@ function render() {
     case "login-entry": html = renderLoginEntry(); break;
     case "onboard-age": html = renderOnboardAge(); break;
     case "onboard-role": html = renderOnboardRole(); break;
+    case "onboard-email": html = renderOnboardEmail(); break;
     case "onboard-avatar": html = renderOnboardAvatar(); break;
     case "pin-login": html = renderPinLogin(); break;
     case "dashboard": html = renderDashboard(); break;
     case "goals": html = renderGoals(); break;
+    case "flexisave": html = renderFlexiSave(); break;
     case "wishlist": html = renderWishlist(); break;
     case "budget": html = renderBudget(); break;
     case "planner": html = renderPlanner(); break;
@@ -407,7 +417,8 @@ function renderLoginEntry() {
         <input type="text" id="li-pin" inputmode="numeric" maxlength="4" placeholder="4-digit PIN" value="${escapeHtml(state.loginEntry.pin)}" />
       </div>
       <button class="btn btn-primary btn-block" id="li-submit" style="max-width:320px;margin-top:16px;">Continue</button>
-      <button class="btn btn-outline btn-block btn-sm" data-nav="splash" style="max-width:320px;margin-top:10px;">← Back</button>
+      ${SavvioCloud.isConfigured() ? `<button class="btn btn-outline btn-block btn-sm" id="li-forgot-btn" style="max-width:320px;margin-top:8px;">Forgot your PIN?</button>` : ""}
+      <button class="btn btn-outline btn-block btn-sm" data-nav="splash" style="max-width:320px;margin-top:8px;">← Back</button>
       <p id="li-error" style="color:var(--danger);font-size:.82rem;min-height:1.2em;"></p>
     </div>
   `;
@@ -424,6 +435,22 @@ function renderOnboardRole() {
         <button data-role="kid" class="${state.onboard.role==='kid'?'selected':''}">🧒<br>Kid or<br>Teen</button>
       </div>
       <button class="btn btn-primary btn-block" id="ob-role-next" style="max-width:320px;margin-top:16px;" ${state.onboard.role?"":"disabled"}>Continue</button>
+    </div>
+  `;
+}
+
+function renderOnboardEmail() {
+  return `
+    <div class="splash">
+      <div style="font-size:3rem;">✉️</div>
+      <h1>Add your email? (optional)</h1>
+      <p>Lets you get a code to reset your PIN if you forget it, and a heads-up when a kid signs up or needs approval. You can skip this.</p>
+      <div style="width:100%;max-width:320px;text-align:left;">
+        <label for="ob-email">Email</label>
+        <input type="email" id="ob-email" placeholder="you@example.com" value="${escapeHtml(state.onboard.email||"")}" />
+      </div>
+      <button class="btn btn-primary btn-block" id="ob-email-next" style="max-width:320px;margin-top:16px;">Continue</button>
+      <button class="btn btn-outline btn-block btn-sm" id="ob-email-skip" style="max-width:320px;margin-top:8px;">Skip for now</button>
     </div>
   `;
 }
@@ -510,7 +537,7 @@ async function submitLoginEntry() {
 
 function offerCreateProfile(name, pin) {
   toast(`No profile found for "${name}" — let's create one!`);
-  state.onboard = { name, ageGroup: "", avatar: "", pin, role: "" };
+  state.onboard = { name, ageGroup: "", avatar: "", pin, role: "", email: "" };
   go("onboard-role");
 }
 
@@ -523,6 +550,7 @@ async function completeCloudLogin(res, pin) {
   const previousStatus = existing ? existing.cloudStatus : null;
   const profile = {
     id: userId, name: res.profile.name, ageGroup: res.profile.ageGroup, role: res.profile.role || "kid", avatar: res.profile.avatar, pin,
+    email: res.profile.email || "",
     xp: res.profile.xp || 0, streak: res.profile.streak || 0, stars: res.profile.stars || 0, lastActiveDate: res.profile.lastActiveDate || null,
     createdDate: res.profile.createdDate || todayStr(),
     goals: saved.goals || (existing && existing.goals) || [],
@@ -534,9 +562,10 @@ async function completeCloudLogin(res, pin) {
     challengeProgress: saved.challengeProgress || (existing && existing.challengeProgress) || {},
     gameStats: saved.gameStats || (existing && existing.gameStats) || { needswants: { played: 0, correct: 0 }, scams: { played: 0, correct: 0 } },
     wishlist: saved.wishlist || (existing && existing.wishlist) || [],
+    flexiSaves: saved.flexiSaves || (existing && existing.flexiSaves) || [],
     subscriptions: saved.subscriptions || (existing && existing.subscriptions) || [],
     habitLog: saved.habitLog || (existing && existing.habitLog) || {},
-    prefs: (existing && existing.prefs) || { darkMode: false, largeText: false },
+    prefs: (existing && existing.prefs) || { darkMode: false, largeText: false, currency: "$" },
     cloudStatus: res.profile.status, sessionToken: res.sessionToken, sessionExpiry: null, locked: false,
   };
   SavvioStorage.saveProfile(profile);
@@ -558,13 +587,13 @@ async function finalizeNewProfile() {
   SavvioStorage.setActiveProfileId(profile.id);
   state.profile = profile;
   applyPrefs(profile);
-  state.onboard = { name: "", ageGroup: "", avatar: "", pin: "", role: "" };
+  state.onboard = { name: "", ageGroup: "", avatar: "", pin: "", role: "", email: "" };
   state.loginEntry = { name: "", pin: "" };
   touchDailyStreak();
   toast(profile.role === "parent" ? `Welcome, ${profile.name}! 👪` : `Welcome, ${profile.name}! 🌱`);
   go("dashboard");
   if (SavvioCloud.isConfigured()) {
-    const res = await SavvioCloud.registerProfile(profile.id, profile.name, profile.ageGroup, profile.avatar, profile.pin, profile.role);
+    const res = await SavvioCloud.registerProfile(profile.id, profile.name, profile.ageGroup, profile.avatar, profile.pin, profile.role, profile.email);
     if (res && res.ok) {
       profile.cloudStatus = res.status;
       profile.sessionToken = res.sessionToken;
@@ -583,6 +612,9 @@ function editProfileModal() {
     <div class="avatar-grid" id="edit-avatar-grid">
       ${AVATARS.map(a => `<button type="button" class="avatar-choice ${p.avatar===a?'selected':''}" data-edit-avatar="${a}">${a}</button>`).join("")}
     </div>
+    ${p.role === "parent" ? `
+    <label for="edit-email" style="margin-top:14px;">Email <span style="font-weight:400;color:var(--ink-faint);">(for PIN recovery and sign-up alerts)</span></label>
+    <input type="email" id="edit-email" value="${escapeHtml(p.email||"")}" placeholder="you@example.com" />` : ""}
     <button class="btn btn-primary btn-block" id="edit-profile-save" style="margin-top:14px;">Save changes</button>
   `);
   let chosenAvatar = p.avatar;
@@ -594,11 +626,15 @@ function editProfileModal() {
   document.getElementById("edit-profile-save").onclick = async () => {
     const name = document.getElementById("edit-name").value.trim();
     if (!name) { toast("Enter a name"); return; }
+    const emailField = document.getElementById("edit-email");
+    const email = emailField ? emailField.value.trim() : p.email;
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("That doesn't look like a valid email"); return; }
     p.name = name;
     p.avatar = chosenAvatar;
+    p.email = email || "";
     saveActive();
     if (SavvioCloud.isConfigured() && p.sessionToken) {
-      const res = await SavvioCloud.updateProfile(p.id, p.sessionToken, name, p.ageGroup, chosenAvatar);
+      const res = await SavvioCloud.updateProfile(p.id, p.sessionToken, name, p.ageGroup, chosenAvatar, p.email);
       if (res && res.locked) { lockProfileLocally(); }
     }
     closeModal();
@@ -644,6 +680,54 @@ function changePinModal() {
     saveActive();
     closeModal();
     toast("PIN updated on this device");
+  };
+}
+
+function forgotPinModal() {
+  openModal(`
+    <div class="modal-head"><h3>Forgot your PIN?</h3><button class="close-x" id="modal-close">✕</button></div>
+    <p style="font-size:.85rem;color:var(--ink-soft);">Enter your name. If there's an email on file for that profile, we'll send a reset code — this only works for profiles with an email saved (usually parent/guardian profiles).</p>
+    <label for="fp-name">Name</label>
+    <input type="text" id="fp-name" maxlength="20" />
+    <button class="btn btn-primary btn-block" id="fp-send-btn" style="margin-top:12px;">Send reset code</button>
+    <div id="fp-step2" style="display:none;margin-top:14px;">
+      <label for="fp-code">6-digit code</label>
+      <input type="text" id="fp-code" inputmode="numeric" maxlength="6" />
+      <label for="fp-newpin">New 4-digit PIN</label>
+      <input type="text" id="fp-newpin" inputmode="numeric" maxlength="4" />
+      <button class="btn btn-primary btn-block" id="fp-confirm-btn" style="margin-top:10px;">Reset PIN</button>
+    </div>
+    <p id="fp-msg" style="font-size:.82rem;color:var(--ink-soft);margin-top:10px;"></p>
+  `);
+  document.getElementById("modal-close").onclick = closeModal;
+  document.getElementById("fp-send-btn").onclick = async () => {
+    const name = document.getElementById("fp-name").value.trim();
+    const msgEl = document.getElementById("fp-msg");
+    if (!name) { toast("Enter a name"); return; }
+    const res = await SavvioCloud.requestPinReset(name);
+    if (res && res.ok) {
+      document.getElementById("fp-step2").style.display = "block";
+      msgEl.style.color = "var(--ink-soft)";
+      msgEl.textContent = "If that profile has an email on file, a code is on its way — check your inbox.";
+    } else {
+      msgEl.style.color = "var(--danger)";
+      msgEl.textContent = (res && res.error) || "Something went wrong — try again.";
+    }
+  };
+  document.getElementById("fp-confirm-btn").onclick = async () => {
+    const name = document.getElementById("fp-name").value.trim();
+    const code = document.getElementById("fp-code").value.trim();
+    const newPin = document.getElementById("fp-newpin").value.trim();
+    const msgEl = document.getElementById("fp-msg");
+    if (!/^\d{4}$/.test(newPin)) { toast("New PIN must be 4 digits"); return; }
+    const res = await SavvioCloud.confirmPinReset(name, code, newPin);
+    if (res && res.ok) {
+      toast("PIN reset — log in with your new PIN 🌱");
+      closeModal();
+    } else {
+      msgEl.style.color = "var(--danger)";
+      msgEl.textContent = (res && res.error) || "Couldn't reset the PIN.";
+    }
   };
 }
 
@@ -874,6 +958,79 @@ function goalCardHtml(g) {
   `;
 }
 
+function renderFlexiSave() {
+  const p = state.profile;
+  const saves = p.flexiSaves || [];
+  const total = saves.reduce((s,x) => s + x.amount, 0);
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 7);
+  const weekSaves = saves.filter(s => new Date(s.date + "T00:00:00") >= cutoff);
+  const fillPct = Math.min(100, Math.round((total / 2000) * 100));
+  return shell(`
+    <div class="section-head" style="margin-top:0;"><h2>Flexi Save</h2></div>
+    <p style="color:var(--ink-soft);font-size:.85rem;margin-top:0;">Your digital piggy bank — no fixed target, just save a little, often. Aim for 2–3 saves a week.</p>
+    <div class="card piggy-card">
+      <div class="piggy-visual">🐷</div>
+      <div class="piggy-total">${money(total)}</div>
+      <div class="progress-track"><div class="progress-fill gold" style="width:${fillPct}%;"></div></div>
+      <div class="pct">${weekSaves.length} save${weekSaves.length===1?"":"s"} this week · aim for 2–3</div>
+    </div>
+    <div class="card">
+      <label>Quick save</label>
+      <div class="quick-actions">
+        <button data-flexi-quick="100">${money(100)}</button>
+        <button data-flexi-quick="300">${money(300)}</button>
+        <button data-flexi-quick="500">${money(500)}</button>
+        <button id="flexi-custom-btn">Custom</button>
+      </div>
+    </div>
+    <div class="card">
+      <label>Recent saves</label>
+      ${saves.length ? [...saves].reverse().slice(0,10).map(s => `<div class="card-flat" style="display:flex;justify-content:space-between;"><span>${fmtDate(s.date)}</span><strong>${money(s.amount)}</strong></div>`).join("") : `<p style="color:var(--ink-faint);margin:0;">No saves yet — tap a quick-save above to start.</p>`}
+    </div>
+    ${total > 0 ? `<button class="btn btn-coral btn-block" id="flexi-break-btn">🔨 Break the piggy bank</button>` : ""}
+    <button class="btn btn-outline btn-block" data-nav="goals" style="margin-top:10px;">← Back to Goals</button>
+  `, "goals");
+}
+
+function flexiSave(amount) {
+  const p = state.profile;
+  if (!p.flexiSaves) p.flexiSaves = [];
+  p.flexiSaves.push({ id: uid("flexi"), amount, date: todayStr() });
+  addXp(8, "Flexi save");
+  saveActive();
+  checkNewBadges();
+  toast(`🐷 +${money(amount)} saved!`);
+  render();
+}
+
+function flexiCustomModal() {
+  openModal(`
+    <div class="modal-head"><h3>Custom save</h3><button class="close-x" id="modal-close">✕</button></div>
+    <label for="flexi-amt">Amount</label>
+    <input type="number" id="flexi-amt" min="0.01" step="0.01" placeholder="250" />
+    <button class="btn btn-primary btn-block" id="flexi-save-custom" style="margin-top:14px;">Save it</button>
+  `);
+  document.getElementById("modal-close").onclick = closeModal;
+  document.getElementById("flexi-save-custom").onclick = () => {
+    const amt = parseFloat(document.getElementById("flexi-amt").value);
+    if (!amt || amt <= 0) { toast("Enter an amount"); return; }
+    closeModal();
+    flexiSave(amt);
+  };
+}
+
+function breakFlexiBank() {
+  if (!confirm("Break the piggy bank and cash out? This clears your Flexi Save total back to zero.")) return;
+  const p = state.profile;
+  const total = (p.flexiSaves || []).reduce((s,x) => s + x.amount, 0);
+  addXp(Math.min(50, Math.round(total / 10)), "Piggy bank cashed out");
+  p.flexiSaves = [];
+  saveActive();
+  checkNewBadges();
+  toast(`🎉 Cashed out ${money(total)}! Spend it wisely or start saving again.`);
+  render();
+}
+
 function renderGoals() {
   const p = state.profile;
   const active = p.goals.filter(g => g.status !== "completed");
@@ -882,7 +1039,10 @@ function renderGoals() {
     <div class="section-head" style="margin-top:0;"><h2>Your goals</h2></div>
     <button class="btn btn-coral btn-block" id="new-goal-btn" style="margin-bottom:10px;">+ New savings goal</button>
     <button class="btn btn-outline btn-block" id="emergency-fund-btn" style="margin-bottom:10px;">🚨 Start an Emergency Fund</button>
-    <button class="btn btn-outline btn-block" data-nav="wishlist" style="margin-bottom:14px;">💭 Wishlist</button>
+    <div class="field-row" style="margin-bottom:14px;">
+      <button class="btn btn-outline" data-nav="flexisave">🐷 Flexi Save</button>
+      <button class="btn btn-outline" data-nav="wishlist">💭 Wishlist</button>
+    </div>
     ${active.length ? active.map(goalCardHtml).join("") : `<div class="card empty-state"><span class="emoji">🌱</span>No active goals. What are you saving for?</div>`}
     ${done.length ? `<div class="section-head"><h2>Completed 🎉</h2></div>${done.map(goalCardHtml).join("")}` : ""}
   `, "goals");
@@ -2084,6 +2244,16 @@ function renderProfile() {
         <span style="font-size:.9rem;">🔠 Large text</span>
         <button class="btn btn-sm ${p.prefs.largeText?'btn-primary':'btn-outline'}" id="toggle-large-text-btn">${p.prefs.largeText?'On':'Off'}</button>
       </div>
+      <div style="padding:8px 0;">
+        <label for="currency-select" style="margin:0 0 6px;">💱 Currency</label>
+        <select id="currency-select">
+          <option value="$" ${p.prefs.currency==='$'?'selected':''}>$ Dollar</option>
+          <option value="₹" ${p.prefs.currency==='₹'?'selected':''}>₹ Rupee</option>
+          <option value="€" ${p.prefs.currency==='€'?'selected':''}>€ Euro</option>
+          <option value="£" ${p.prefs.currency==='£'?'selected':''}>£ Pound</option>
+          <option value="¥" ${p.prefs.currency==='¥'?'selected':''}>¥ Yen</option>
+        </select>
+      </div>
     </div>
     <button class="btn btn-outline btn-block" id="edit-profile-btn">✏️ Edit name &amp; avatar</button>
     <button class="btn btn-outline btn-block" id="change-pin-btn" style="margin-top:10px;">🔑 Change PIN</button>
@@ -2107,6 +2277,8 @@ function bindScreenEvents() {
 
   const liSubmit = document.getElementById("li-submit");
   if (liSubmit) liSubmit.onclick = () => submitLoginEntry();
+  const liForgotBtn = document.getElementById("li-forgot-btn");
+  if (liForgotBtn) liForgotBtn.onclick = () => forgotPinModal();
   const liPinField = document.getElementById("li-pin");
   if (liPinField) liPinField.onkeydown = (e) => { if (e.key === "Enter") submitLoginEntry(); };
 
@@ -2122,9 +2294,19 @@ function bindScreenEvents() {
   });
   const roleNext = document.getElementById("ob-role-next");
   if (roleNext) roleNext.onclick = () => {
-    if (state.onboard.role === "parent") { state.onboard.ageGroup = "teens"; go("onboard-avatar"); }
+    if (state.onboard.role === "parent") { state.onboard.ageGroup = "teens"; go("onboard-email"); }
     else { go("onboard-age"); }
   };
+
+  const emailNext = document.getElementById("ob-email-next");
+  if (emailNext) emailNext.onclick = () => {
+    const val = document.getElementById("ob-email").value.trim();
+    if (val && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { toast("That doesn't look like a valid email"); return; }
+    state.onboard.email = val;
+    go("onboard-avatar");
+  };
+  const emailSkip = document.getElementById("ob-email-skip");
+  if (emailSkip) emailSkip.onclick = () => { state.onboard.email = ""; go("onboard-avatar"); };
 
   document.querySelectorAll("[data-age]").forEach(el => el.onclick = () => {
     state.onboard.ageGroup = el.dataset.age;
@@ -2153,6 +2335,13 @@ function bindScreenEvents() {
     const suggested = Math.max(50, Math.round(expense || 100));
     goalFormModal(null, { title: "Emergency Fund", target: suggested, current: "0", targetDate: "", icon: "🚨" });
   };
+  // Flexi Save (digital piggy bank)
+  document.querySelectorAll("[data-flexi-quick]").forEach(el => el.onclick = () => flexiSave(parseFloat(el.dataset.flexiQuick)));
+  const flexiCustomBtn = document.getElementById("flexi-custom-btn");
+  if (flexiCustomBtn) flexiCustomBtn.onclick = () => flexiCustomModal();
+  const flexiBreakBtn = document.getElementById("flexi-break-btn");
+  if (flexiBreakBtn) flexiBreakBtn.onclick = () => breakFlexiBank();
+
   document.querySelectorAll("[data-goal-edit]").forEach(el => el.onclick = () => {
     const g = state.profile.goals.find(x => x.id === el.dataset.goalEdit);
     goalFormModal(g);
@@ -2312,6 +2501,12 @@ function bindScreenEvents() {
   if (toggleLargeTextBtn) toggleLargeTextBtn.onclick = () => {
     state.profile.prefs.largeText = !state.profile.prefs.largeText;
     applyPrefs(state.profile);
+    saveActive();
+    render();
+  };
+  const currencySelect = document.getElementById("currency-select");
+  if (currencySelect) currencySelect.onchange = () => {
+    state.profile.prefs.currency = currencySelect.value;
     saveActive();
     render();
   };

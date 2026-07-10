@@ -54,7 +54,7 @@ const MAX_FAILED_ATTEMPTS = 5;
 const DEFAULT_ADMIN_USERNAME = "sav_admin";
 const DEFAULT_ADMIN_PASSWORD = "SavAdmin123$";
 
-const USER_HEADERS = ["userId","name","ageGroup","role","avatar","pinHash","pinSalt","status","xp","streak","stars","lastActiveDate","createdDate","dataJson","sessionToken","sessionExpiry","failedAttempts"];
+const USER_HEADERS = ["userId","name","ageGroup","role","avatar","email","pinHash","pinSalt","status","xp","streak","stars","lastActiveDate","createdDate","dataJson","sessionToken","sessionExpiry","failedAttempts","resetCode","resetCodeExpiry"];
 const ADMIN_HEADERS = ["adminId","username","passwordHash","passwordSalt","createdDate","sessionToken","sessionExpiry"];
 const AUDIT_HEADERS = ["timestamp","admin","action","targetUserId","details"];
 const TASK_HEADERS = ["taskId","title","starValue","assignedTo","recurring","active","createdDate"];
@@ -82,6 +82,8 @@ function doPost(e) {
       case "restoreProfile":  return jsonOut(restoreProfile(body));
       case "updateProfile":   return jsonOut(updateProfile(body));
       case "changePin":       return jsonOut(changePin(body));
+      case "requestPinReset": return jsonOut(requestPinReset(body));
+      case "confirmPinReset": return jsonOut(confirmPinReset(body));
 
       case "listTasks":    return jsonOut(listTasks(body));
       case "completeTask": return jsonOut(completeTask(body));
@@ -255,7 +257,7 @@ function periodKeyFor(recurring) {
 function publicUser(user) {
   return {
     userId: user.userId, name: user.name, ageGroup: user.ageGroup, role: user.role || "kid", avatar: user.avatar,
-    status: user.status, xp: user.xp, streak: user.streak, stars: Number(user.stars) || 0,
+    email: user.email || "", status: user.status, xp: user.xp, streak: user.streak, stars: Number(user.stars) || 0,
     lastActiveDate: user.lastActiveDate, createdDate: user.createdDate,
   };
 }
@@ -266,18 +268,19 @@ function publicUser(user) {
 function registerProfile(body) {
   const { userId, name, ageGroup, avatar, pin } = body;
   const role = body.role === "parent" ? "parent" : "kid";
+  const email = (body.email || "").trim();
   if (!userId || !name || !pin) return { ok: false, error: "Missing fields" };
   if (findUser(userId)) return { ok: false, error: "Profile already exists" };
   const salt = randomSalt();
   const sessionToken = randomToken();
   const sessionExpiry = hoursFromNow(SESSION_HOURS);
   appendUserRow({
-    userId, name, ageGroup, role, avatar,
+    userId, name, ageGroup, role, avatar, email,
     pinHash: hashWithSalt(pin, salt), pinSalt: salt,
     status: "pending", xp: 0, streak: 0, stars: 0, lastActiveDate: "", createdDate: nowIso(),
-    dataJson: "{}", sessionToken, sessionExpiry, failedAttempts: 0,
+    dataJson: "{}", sessionToken, sessionExpiry, failedAttempts: 0, resetCode: "", resetCodeExpiry: "",
   });
-  notifyAdminNewSignup(name + (role === "parent" ? " (parent/guardian)" : ""));
+  notifyNewSignup(name, role);
   // New profiles start "pending" so they show up for parent/admin review,
   // but that status doesn't block anything technically — sync and
   // chores/perks all work right away. Approve/reject are for oversight
@@ -287,17 +290,25 @@ function registerProfile(body) {
   return { ok: true, status: "pending", sessionToken };
 }
 
-function notifyAdminNewSignup(name) {
-  const email = PropertiesService.getScriptProperties().getProperty("ADMIN_NOTIFY_EMAIL");
-  if (!email) return;
-  try {
-    MailApp.sendEmail({
-      to: email,
-      subject: "Savvio: new profile waiting for approval",
-      body: name + " just created a Savvio profile and is waiting for approval.\n\nOpen the Admin portal to approve, reject, lock, or manage it.",
-      name: "Savvio Admin Alerts",
-    });
-  } catch (e) { /* best effort — a failed email shouldn't block signup */ }
+function notifyNewSignup(name, role) {
+  const subject = "Savvio: new profile waiting for approval";
+  const body = name + (role === "parent" ? " (parent/guardian)" : "") +
+    " just created a Savvio profile and is waiting for approval.\n\n" +
+    "Open the Admin portal — or the Manage tab if you're a parent — to approve, reject, or manage it.";
+
+  const adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_NOTIFY_EMAIL");
+  const parentEmails = readRows(usersSheet(), USER_HEADERS)
+    .filter(u => (u.role || "kid") === "parent" && u.status === "active" && u.email)
+    .map(u => u.email);
+
+  const recipients = new Set(parentEmails);
+  if (adminEmail) recipients.add(adminEmail);
+
+  recipients.forEach(to => {
+    try {
+      MailApp.sendEmail({ to, subject, body, name: "Savvio Alerts" });
+    } catch (e) { /* best effort — a failed email shouldn't block signup */ }
+  });
 }
 
 function loginProfile(body) {
@@ -402,8 +413,57 @@ function updateProfile(body) {
   if (name) user.name = name;
   if (ageGroup) user.ageGroup = ageGroup;
   if (avatar) user.avatar = avatar;
+  if (body.email !== undefined) user.email = String(body.email).trim();
   writeUserRow(user);
   return { ok: true, profile: publicUser(user) };
+}
+
+// Self-service "forgot PIN" — only works if the profile has an email on
+// file (parents are asked for one at signup; kids aren't, by design, so
+// a kid who forgets their PIN still needs a parent or the Admin portal).
+// The code is a short-lived 6-digit code emailed to the address on file;
+// it's never returned in the API response itself.
+function requestPinReset(body) {
+  const { name } = body;
+  if (!name) return { ok: false, error: "Enter your name" };
+  const matches = readRows(usersSheet(), USER_HEADERS)
+    .filter(r => String(r.name).trim().toLowerCase() === String(name).trim().toLowerCase());
+  const withEmail = matches.find(u => u.email);
+  // Always return the same generic response whether or not a match was
+  // found — avoids leaking who has an account or an email on file.
+  if (!withEmail) return { ok: true, sent: false };
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  withEmail.resetCode = code;
+  withEmail.resetCodeExpiry = hoursFromNow(1);
+  writeUserRow(withEmail);
+  try {
+    MailApp.sendEmail({
+      to: withEmail.email,
+      subject: "Savvio: your PIN reset code",
+      body: "Your Savvio PIN reset code is: " + code + "\n\nThis code expires in 1 hour. If you didn't request this, you can ignore this email.",
+      name: "Savvio Account Recovery",
+    });
+  } catch (e) { return { ok: false, error: "Couldn't send the email — try again later" }; }
+  return { ok: true, sent: true };
+}
+
+function confirmPinReset(body) {
+  const { name, code, newPin } = body;
+  if (!name || !code || !newPin) return { ok: false, error: "Missing fields" };
+  if (!/^\d{4}$/.test(String(newPin))) return { ok: false, error: "New PIN must be 4 digits" };
+  const user = readRows(usersSheet(), USER_HEADERS)
+    .find(r => String(r.name).trim().toLowerCase() === String(name).trim().toLowerCase() && r.resetCode && r.resetCode === String(code));
+  if (!user) return { ok: false, error: "Incorrect or expired code" };
+  if (!user.resetCodeExpiry || new Date(user.resetCodeExpiry) < new Date()) return { ok: false, error: "That code has expired — request a new one" };
+  const salt = randomSalt();
+  user.pinHash = hashWithSalt(newPin, salt);
+  user.pinSalt = salt;
+  user.resetCode = "";
+  user.resetCodeExpiry = "";
+  user.failedAttempts = 0;
+  if (user.status === "locked") user.status = "active";
+  writeUserRow(user);
+  return { ok: true };
 }
 
 function changePin(body) {

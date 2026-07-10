@@ -45,10 +45,23 @@ Add one more Script Property:
 - `ADMIN_NOTIFY_EMAIL` → the email address you want notified
 
 Whenever a new profile registers, you'll get a short email ("X just created
-a Savvio profile and is waiting for approval"). Leave this property unset
-if you'd rather just check the Admin portal's Overview tab, which shows
-pending sign-ups too. This uses `MailApp.sendEmail`, which is included in
-Apps Script's default authorization — no extra scopes or setup needed.
+a Savvio profile and is waiting for approval"). This is optional — **every
+parent profile with an email address on file gets notified automatically
+too**, no property needed for that part. Set `ADMIN_NOTIFY_EMAIL` if you
+want a copy sent somewhere else as well (e.g. an inbox no single parent
+profile owns). Leave everything unset and you'll still see pending
+sign-ups on the Admin portal's Overview tab and a parent's Manage tab.
+
+### Forgot PIN (self-service, email-based)
+
+If a parent adds their email on the "Log in or create profile" flow (a
+"Skip for now" option is always shown — it's optional), they can tap
+"Forgot your PIN?" on the login screen to get a 6-digit code emailed to
+them, valid for 1 hour, to set a new PIN themselves. Kids aren't asked for
+an email by design — if a kid forgets their PIN, a parent resets it from
+the Manage tab or the Admin portal instead. Both `MailApp.sendEmail` calls
+(this and the new-signup notification) use Apps Script's default
+authorization — no extra setup needed.
 
 ## 3. Deploy as a web app
 
@@ -121,6 +134,13 @@ and redeploy to GitHub Pages as usual.
   stars by itself — a parent or admin approving it does. Redeeming a reward
   deducts stars immediately (so a kid can't request the same reward twice
   with money they don't have) and refunds automatically if rejected.
+- **Flexi Save** (Goals → 🐷 Flexi Save) is a digital piggy bank with no
+  fixed target — quick-save buttons, a running total, and a weekly-save
+  count nudging toward 2–3 saves a week. It's fully local/synced like
+  Goals — no parent setup needed, unlike Chores.
+- **Currency** is a per-profile display preference (Profile → Accessibility
+  → Currency: $, ₹, €, £, ¥) — it only changes the symbol shown, not any
+  stored values, so switching it is always safe and reversible.
 - The app is a full installable PWA now (`manifest.json` + `service-worker.js`
   + `assets/icons/`). On Android, "Add to Home Screen" gives a real app
   icon with no browser chrome. To go further and package it as an actual

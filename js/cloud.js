@@ -18,7 +18,7 @@
    =========================================================== */
 
 const SavvioCloud = (() => {
-  const PROXY_URL = "https://script.google.com/macros/s/AKfycbz9t_tXzxIV5B_weSOZqGTSbzJHBYct31BJHEPegB0JIOmxbC59UrdetyZTWkXAwg4I/exec"; // <- paste your Apps Script /exec URL here once deployed
+  const PROXY_URL = "https://script.google.com/macros/s/AKfycbyVrbO0TGlJK3vIyjLxWzUZvC69ODtqv6R3Sv5oymbc0ST_GP3f7tCUJbEg6GdNdDBn/exec"; // <- paste your Apps Script /exec URL here once deployed
   const TIMEOUT_MS = 4000;
 
   function withTimeout(promise, ms) {
@@ -48,8 +48,8 @@ const SavvioCloud = (() => {
   return {
     isConfigured: () => !!PROXY_URL,
 
-    registerProfile: (userId, name, ageGroup, avatar, pin, role) =>
-      call("registerProfile", { userId, name, ageGroup, avatar, pin, role }),
+    registerProfile: (userId, name, ageGroup, avatar, pin, role, email) =>
+      call("registerProfile", { userId, name, ageGroup, avatar, pin, role, email }),
 
     loginProfile: (userId, pin) => call("loginProfile", { userId, pin }),
     loginByName: (name, pin) => call("loginByName", { name, pin }),
@@ -60,10 +60,12 @@ const SavvioCloud = (() => {
       call("syncProfile", { userId, sessionToken, xp, streak, lastActiveDate, dataJson }),
 
     restoreProfile: (userId, sessionToken) => call("restoreProfile", { userId, sessionToken }),
-    updateProfile: (userId, sessionToken, name, ageGroup, avatar) =>
-      call("updateProfile", { userId, sessionToken, name, ageGroup, avatar }),
+    updateProfile: (userId, sessionToken, name, ageGroup, avatar, email) =>
+      call("updateProfile", { userId, sessionToken, name, ageGroup, avatar, email }),
     changePin: (userId, sessionToken, currentPin, newPin) =>
       call("changePin", { userId, sessionToken, currentPin, newPin }),
+    requestPinReset: (name) => call("requestPinReset", { name }),
+    confirmPinReset: (name, code, newPin) => call("confirmPinReset", { name, code, newPin }),
 
     // --- Chores & Perks (kid-facing) ---
     listTasks: (userId, sessionToken) => call("listTasks", { userId, sessionToken }),

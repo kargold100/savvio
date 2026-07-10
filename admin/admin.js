@@ -203,8 +203,8 @@ function renderUsersTab() {
 function userRow(u) {
   return `
     <tr>
-      <td><div class="who"><div class="av">${u.avatar||"🙂"}</div><div><div style="font-weight:700;">${escapeHtml(u.name)}</div><div style="font-size:.72rem;color:var(--ink-faint);">${u.userId}</div></div></div></td>
-      <td>${u.ageGroup === "kids" ? "Kid (8–12)" : "Teen (13–18)"}</td>
+      <td><div class="who"><div class="av">${u.avatar||"🙂"}</div><div><div style="font-weight:700;">${escapeHtml(u.name)}</div><div style="font-size:.72rem;color:var(--ink-faint);">${u.userId}</div>${u.email ? `<div style="font-size:.72rem;color:var(--ink-faint);">${escapeHtml(u.email)}</div>` : ""}</div></div></td>
+      <td>${u.role === "parent" ? "👪 Parent/Guardian" : (u.ageGroup === "kids" ? "Kid (8–12)" : "Teen (13–18)")}</td>
       <td><span class="status-pill status-${u.status}">${u.status}</span></td>
       <td>${u.xp||0}</td>
       <td>🔥${u.streak||0}</td>
